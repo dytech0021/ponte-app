@@ -6,7 +6,7 @@
 # decidido pelo relay (PONTE_AUTH_PORT), que conhece os computadores registrados e os códigos dos links.
 # Fica em /etc/mediamtx/mediamtx.yml; o que não está aqui vale o padrão do MediaMTX.
 
-logLevel: warn
+logLevel: info
 logDestinations: [stdout]
 readTimeout: 10s
 writeTimeout: 10s

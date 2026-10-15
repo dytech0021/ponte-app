@@ -23,6 +23,11 @@ internal sealed class MainForm : Form
     private UpdateManifest? _pendingUpdate;
     private string _pendingFile = "";
     private bool _checkingUpdate, _restarting, _closed, _applyingUpdate;
+    // Versão nova pronta enquanto alguém usa o Ponte: o aviso e o botão "Atualizar agora".
+    private readonly Button _updateNow;
+    private string _offeredVersion = "";
+    private bool _balloonOffersUpdate;
+    private readonly List<StreamViewerForm> _streams = new();
     private readonly NotifyIcon _tray;
     private BroadcastDialog? _broadcastDialog;
     private readonly Button _accountButton;
@@ -125,6 +130,9 @@ internal sealed class MainForm : Form
         _version = Ui.Text(this, "", 14, 538, 424);
         _version.ForeColor = SystemColors.GrayText;
         _version.AutoEllipsis = true;
+        _updateNow = Ui.Button(this, "Atualizar agora", 318, 532, 120);
+        _updateNow.Visible = false;
+        _updateNow.Click += (_, _) => UpdateNow();
         if (!Elevation.IsElevated)
         {
             // Sem isso o Windows bloqueia mouse e teclado em janelas de programas abertos como administrador.
@@ -162,7 +170,15 @@ internal sealed class MainForm : Form
             _status.Text = "Sem administrador: quem acessar este computador não consegue clicar em programas abertos como administrador.";
         _updateTimer.Tick += async (_, _) =>
         {
-            _updateTimer.Interval = 30 * 60 * 1000;   // a primeira checagem é logo depois de abrir; as seguintes, a cada meia hora
+            // A primeira checagem é logo depois de abrir; as seguintes, a cada meia hora. Com uma versão nova já
+            // baixada, confere a cada minuto se já dá para instalar sem atrapalhar ninguém.
+            if (_pendingUpdate is not null)
+            {
+                _updateTimer.Interval = 60 * 1000;
+                await ApplyUpdateAsync(force: false);
+                return;
+            }
+            _updateTimer.Interval = 30 * 60 * 1000;
             await CheckForUpdateAsync();
         };
         if (_config.AutoUpdate && Updater.CanSelfUpdate) _updateTimer.Start();
@@ -186,7 +202,11 @@ internal sealed class MainForm : Form
         _version.Text = $"Ponte {Updater.Current}, {mode}{(note.Length > 0 ? " - " + note : "")}";
     }
 
-    private bool Idle => _host.Current is null && _viewers.Count == 0;
+    // Ninguém conectado, nada sendo transmitido ou assistido.
+    private bool Idle => _host.Current is null && _viewers.Count == 0 && _streams.Count == 0 && _broadcastDialog is not { Active: true };
+
+    // Alguém usando a janela do Ponte agora: a atualização pergunta em vez de reiniciar sozinha.
+    private bool InUse => Visible && WindowState != FormWindowState.Minimized && Native.IdleTime < TimeSpan.FromMinutes(10);
 
     private IEnumerable<string> RestartArgs => _args.Where(a => a is not ("--atualizado" or "--aguardar" or "--ja-elevou" or "--elevar"));
 
@@ -220,14 +240,23 @@ internal sealed class MainForm : Form
                 return;
             }
             ShowVersion($"baixando a versão {manifest.Version}");
-            _pendingFile = await Updater.DownloadAsync(_config, manifest, CancellationToken.None);
+            string file = await Updater.DownloadAsync(_config, manifest, CancellationToken.None);
+            // O teste de partida da versão nova roda fora da janela, que continua respondendo: com ela parada
+            // esperando, a versão nova (até a 1.6.1) travava ao aplicar o tema, que avisa todas as janelas da troca
+            // de cores e espera o aviso chegar.
+            ShowVersion($"conferindo a versão {manifest.Version}");
+            await Task.Run(() => Updater.Verify(file, manifest));
+            _pendingFile = file;
             _pendingUpdate = manifest;
-            ApplyUpdateWhenIdle();
+            await ApplyUpdateAsync(force: false);
         }
         catch (Exception ex) when (ex is PonteException or IOException or UnauthorizedAccessException)
         {
-            // Falha de atualização não atrapalha o uso: fica registrada na linha de versão e tenta de novo na próxima rodada.
-            ShowVersion(ex is PonteException ? ex.Message : "não foi possível gravar a atualização nesta pasta");
+            // Falha de atualização não atrapalha o uso: fica registrada na linha de versão e tenta de novo em 5 minutos.
+            ShowVersion((ex is PonteException ? ex.Message : "não foi possível gravar a atualização nesta pasta") + " Nova tentativa em 5 minutos.");
+            _updateTimer.Stop();
+            _updateTimer.Interval = 5 * 60 * 1000;
+            _updateTimer.Start();
         }
         finally
         {
@@ -235,37 +264,34 @@ internal sealed class MainForm : Form
         }
     }
 
-    // A troca reinicia o programa, então espera não haver ninguém conectado. O teste de partida da versão nova roda
-    // fora da janela, que continua respondendo: com ela parada esperando, a versão nova (até a 1.6.1) travava ao
-    // aplicar o tema, que avisa todas as janelas da troca de cores e espera o aviso chegar.
-    private async void ApplyUpdateWhenIdle()
+    /// <summary>
+    /// Troca pela versão nova e reabre. Sozinha ([force] falso), só quando ninguém está conectado nem usando a janela
+    /// (os computadores acessados de longe continuam se atualizando sem ninguém por perto); senão, oferece o botão
+    /// "Atualizar agora" e o aviso perto do relógio.
+    /// </summary>
+    private async Task ApplyUpdateAsync(bool force)
     {
         if (_pendingUpdate is not { } update || _restarting || _applyingUpdate) return;
-        if (!Idle)
+        if (!force && (!Idle || InUse))
         {
-            ShowVersion($"versão {update.Version} pronta; instala quando a sessão terminar");
+            OfferUpdate(update);
             return;
         }
         _applyingUpdate = true;
         try
         {
-            ShowVersion($"conferindo a versão {update.Version}");
-            string file = _pendingFile;
-            await Task.Run(() => Updater.Verify(file, update));
-            // Alguém pode ter se conectado enquanto a versão nova era conferida: a troca espera essa sessão.
-            if (!Idle)
-            {
-                ShowVersion($"versão {update.Version} pronta; instala quando a sessão terminar");
-                return;
-            }
-            Updater.Replace(file, RestartArgs.Append("--atualizado"));
+            // Dá à janela a chance de mostrar o aviso antes de fechar.
+            ShowVersion($"instalando a versão {update.Version}");
+            await Task.Yield();
+            Updater.Replace(_pendingFile, RestartArgs.Append("--atualizado"));
             _restarting = true;
             Close();
         }
         catch (PonteException ex)
         {
-            // Tenta de novo em 5 minutos, e não só na próxima meia hora.
             _pendingUpdate = null;
+            _updateNow.Visible = false;
+            _version.Width = 424;
             ShowVersion(ex.Message + " Nova tentativa em 5 minutos.");
             _updateTimer.Stop();
             _updateTimer.Interval = 5 * 60 * 1000;
@@ -275,6 +301,39 @@ internal sealed class MainForm : Form
         {
             _applyingUpdate = false;
         }
+    }
+
+    private void OfferUpdate(UpdateManifest update)
+    {
+        _updateNow.Visible = true;
+        _version.Width = 296;
+        ShowVersion($"versão {update.Version} pronta");
+        _status.Text = $"Chegou a versão {update.Version} do Ponte. Clique em \"Atualizar agora\": o Ponte fecha e abre de novo já atualizado.";
+        // O aviso perto do relógio aparece uma vez por versão; o botão fica na janela até a troca.
+        if (_offeredVersion == update.Version) return;
+        _offeredVersion = update.Version;
+        _balloonOffersUpdate = true;
+        _tray.ShowBalloonTip(15_000, "Nova versão do Ponte",
+            $"A versão {update.Version} está pronta. Clique aqui para atualizar agora: o Ponte fecha e abre de novo atualizado.", ToolTipIcon.Info);
+    }
+
+    private async void UpdateNow()
+    {
+        if (_pendingUpdate is not { } update || _restarting || _applyingUpdate) return;
+        if (!Idle)
+        {
+            var ending = new List<string>();
+            if (_host.Current is { } session) ending.Add($"a sessão de {session.PeerName} neste computador");
+            if (_viewers.Count > 0) ending.Add(_viewers.Count == 1 ? "o acesso ao outro computador" : $"os {_viewers.Count} acessos a outros computadores");
+            if (_broadcastDialog is { Active: true }) ending.Add("a transmissão da tela");
+            if (_streams.Count > 0) ending.Add("a transmissão que você está assistindo");
+            string list = ending.Count == 1 ? ending[0] : string.Join(", ", ending.Take(ending.Count - 1)) + " e " + ending[^1];
+            ShowFromTray();
+            if (MessageBox.Show(this, $"Atualizar agora encerra {list}. O Ponte fecha e abre de novo na versão {update.Version}.\n\nAtualizar agora?",
+                    "Ponte", MessageBoxButtons.YesNo, MessageBoxIcon.Question) != DialogResult.Yes)
+                return;
+        }
+        await ApplyUpdateAsync(force: true);
     }
 
     // ---------- este computador sendo acessado ----------
@@ -308,7 +367,7 @@ internal sealed class MainForm : Form
         _indicator?.Finish();
         _indicator = null;
         _status.Text = $"Sessão de {session.PeerName} encerrada às {DateTime.Now:HH:mm} (começou às {session.Started:HH:mm}, entrou por {session.Access}).";
-        ApplyUpdateWhenIdle();
+        _ = ApplyUpdateAsync(force: false);
     }
 
     private void ChangePassword()
@@ -365,7 +424,14 @@ internal sealed class MainForm : Form
         {
             if (StreamViewerForm.Parse(target, _config) is { } stream)
             {
-                new StreamViewerForm(_config, stream.Server, stream.Token).Show();
+                var watch = new StreamViewerForm(_config, stream.Server, stream.Token);
+                _streams.Add(watch);
+                watch.FormClosed += (_, _) =>
+                {
+                    _streams.Remove(watch);
+                    _ = ApplyUpdateAsync(force: false);
+                };
+                watch.Show();
                 _status.Text = "Assistindo à transmissão em outra janela.";
                 return;
             }
@@ -390,7 +456,7 @@ internal sealed class MainForm : Form
             {
                 _viewers.Remove(form);
                 if (!_closed) RefreshComputers();
-                ApplyUpdateWhenIdle();
+                _ = ApplyUpdateAsync(force: false);
             };
             form.Show();
             _status.Text = session.Paired
@@ -620,6 +686,14 @@ internal sealed class MainForm : Form
             Text = $"Ponte {Updater.Current}{mode} · ID {Security.FormatId(_config.Id)}",
         };
         tray.MouseClick += (_, e) => { if (e.Button == MouseButtons.Left) ShowFromTray(); };
+        tray.BalloonTipClicked += (_, _) =>
+        {
+            if (_balloonOffersUpdate) UpdateNow();
+            else ShowFromTray();
+        };
+        tray.BalloonTipClosed += (_, _) => _balloonOffersUpdate = false;
+        if (_args.Contains("--atualizado"))
+            tray.ShowBalloonTip(8_000, "Ponte atualizado", $"O Ponte foi atualizado para a versão {Updater.Current}.", ToolTipIcon.Info);
         return tray;
     }
 
@@ -731,6 +805,7 @@ internal sealed class MainForm : Form
         _presenceTimer.Dispose();
         if (IsHandleCreated) Native.RemoveClipboardFormatListener(Handle);
         foreach (var viewer in _viewers.ToArray()) viewer.Close();
+        foreach (var watch in _streams.ToArray()) watch.Close();
         _indicator?.Finish();
         _host.Dispose();
         base.OnFormClosed(e);

@@ -40,6 +40,8 @@ class AssistirActivity : Activity() {
     private var web: WebView? = null
     private lateinit var container: FrameLayout
     private lateinit var store: Store
+    // O aviso de versão nova aparece também assistindo (menos na janela flutuante).
+    private lateinit var updates: UpdateFlow
     private var currentUrl = ""
     @Volatile private var fullScreen = true
     private var pipSupported = false
@@ -81,6 +83,7 @@ class AssistirActivity : Activity() {
             return
         }
         store = Store(this)
+        updates = UpdateFlow(this, store)
         fullScreen = store.watchFullScreen
         pipSupported = packageManager.hasSystemFeature(PackageManager.FEATURE_PICTURE_IN_PICTURE)
         val page = Uri.parse(stream.url)
@@ -248,6 +251,7 @@ class AssistirActivity : Activity() {
         // Saiu da janela flutuante: ou voltou para a tela (onResume vem em seguida), ou a janela foi fechada, o que
         // encerra a transmissão aqui, como o botão voltar. Conforme a versão do Android, o fechamento chega antes ou
         // depois de onStop.
+        updates.bannerAllowed = !isInPictureInPictureMode
         if (isInPictureInPictureMode) {
             container.requestApplyInsets()
         } else if (stopped) {
@@ -295,12 +299,19 @@ class AssistirActivity : Activity() {
         super.onResume()
         leftPip = false
         web?.onResume()
+        // Link inválido: a tela fecha já no onCreate, antes de existir o aviso de atualização.
+        if (::updates.isInitialized) updates.onResume()
     }
 
     // Na janela flutuante a tela fica "pausada", mas à vista: o vídeo continua.
     override fun onPause() {
         if (!inPip()) web?.onPause()
+        if (::updates.isInitialized) updates.onPause()
         super.onPause()
+    }
+
+    override fun onRequestPermissionsResult(requestCode: Int, permissions: Array<out String>, grantResults: IntArray) {
+        if (!::updates.isInitialized || !updates.onPermissionResult(requestCode)) super.onRequestPermissionsResult(requestCode, permissions, grantResults)
     }
 
     override fun onStop() {

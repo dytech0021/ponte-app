@@ -65,6 +65,10 @@ class MainActivity : Activity() {
         }
 
         showVersion()
+        if (intent.getBooleanExtra(EXTRA_UPDATED, false))
+            Toast.makeText(this, "Ponte atualizado para a versão ${BuildConfig.VERSION_NAME}.", Toast.LENGTH_LONG).show()
+        // Aberto, o aviso "Ponte atualizado" já não serve.
+        getSystemService(android.app.NotificationManager::class.java).cancel(AtualizadoReceiver.NOTIFICATION_ID)
         // A chave do aparelho fica no cofre do Android; criá-la na primeira vez pode levar um instante.
         thread(name = "ponte-identidade") {
             val id = try { Crypto.idFromSpki(DeviceIdentity.get().spki) } catch (e: Exception) { "" }
@@ -88,7 +92,12 @@ class MainActivity : Activity() {
 
     override fun onPause() {
         presence.removeCallbacks(checkPresence)
+        updates.onPause()
         super.onPause()
+    }
+
+    override fun onRequestPermissionsResult(requestCode: Int, permissions: Array<out String>, grantResults: IntArray) {
+        if (!updates.onPermissionResult(requestCode)) super.onRequestPermissionsResult(requestCode, permissions, grantResults)
     }
 
     override fun onDestroy() {
@@ -203,6 +212,9 @@ class MainActivity : Activity() {
     // ---------- online / offline ----------
 
     companion object {
+        /** Aberta de novo pela atualização: avisa que já está na versão nova. */
+        const val EXTRA_UPDATED = "atualizado"
+
         /** De onde vem quem está online. Os testes trocam por uma resposta pronta, para não depender do servidor. */
         internal var presenceSource: (String, String, List<Target>) -> Map<String, Boolean> =
             { server, key, targets -> Presence.check(server, key, targets) }

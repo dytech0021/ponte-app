@@ -70,6 +70,25 @@ object Apoio {
 
     fun avanca(ms: Long) = shadowOf(Looper.getMainLooper()).idleFor(Duration.ofMillis(ms))
 
+    /** Os textos visíveis dentro de uma vista (rótulos e botões). */
+    fun textos(view: View): List<String> = when {
+        view.visibility != View.VISIBLE -> emptyList()
+        view is android.view.ViewGroup -> (0 until view.childCount).flatMap { textos(view.getChildAt(it)) }
+        view is android.widget.TextView -> listOf(view.text.toString())
+        else -> emptyList()
+    }
+
+    /** Toca no rótulo ou botão com este texto, dentro da vista. */
+    fun clica(view: View, text: String) {
+        fun find(v: View): View? = when {
+            v is android.widget.TextView && v.text.toString() == text -> v
+            v is android.view.ViewGroup -> (0 until v.childCount).firstNotNullOfOrNull { find(v.getChildAt(it)) }
+            else -> null
+        }
+        (find(view) ?: error("não achei \"$text\"")).performClick()
+        shadowOf(Looper.getMainLooper()).idle()
+    }
+
     /** Roda o que estiver pendente na interface até a condição valer, ou o prazo acabar. */
     fun espera(timeoutMs: Long, condition: () -> Boolean): Boolean {
         val end = System.currentTimeMillis() + timeoutMs

@@ -53,6 +53,27 @@ internal static class Native
     public static extern uint SendInput(uint count, INPUT[] inputs, int size);
 
     [StructLayout(LayoutKind.Sequential)]
+    private struct LASTINPUTINFO
+    {
+        public uint cbSize, dwTime;
+    }
+
+    [DllImport("user32.dll")]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool GetLastInputInfo(ref LASTINPUTINFO info);
+
+    /// <summary>Quanto tempo faz que ninguém mexe no mouse ou no teclado deste computador.</summary>
+    public static TimeSpan IdleTime
+    {
+        get
+        {
+            var info = new LASTINPUTINFO { cbSize = (uint)Marshal.SizeOf<LASTINPUTINFO>() };
+            if (!GetLastInputInfo(ref info)) return TimeSpan.Zero;
+            return TimeSpan.FromMilliseconds(unchecked((uint)Environment.TickCount - info.dwTime));
+        }
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
     public struct KBDLLHOOKSTRUCT
     {
         public uint vkCode, scanCode, flags, time;

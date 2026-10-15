@@ -1,4 +1,4 @@
-namespace Ponte;
+﻿namespace Ponte;
 
 /// <summary>
 /// Transmitir a tela: quem abre o link assiste ao vivo, com o som, sem controle nenhum. A transmissão dura
@@ -26,6 +26,9 @@ internal sealed class BroadcastDialog : Form
     private Broadcast? _broadcast;
     private CancellationTokenSource? _starting;
     private bool _closingNow;
+
+    /// <summary>Transmitindo, ou começando a transmitir.</summary>
+    public bool Active => _broadcast is not null || _starting is not null;
 
     public BroadcastDialog(HostService host, AppConfig config)
     {

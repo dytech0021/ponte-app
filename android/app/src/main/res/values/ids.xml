@@ -5,4 +5,5 @@
     <item name="mensagem" type="id" />
     <item name="acao" type="id" />
     <item name="transmissao" type="id" />
+    <item name="aviso_atualizacao" type="id" />
 </resources>

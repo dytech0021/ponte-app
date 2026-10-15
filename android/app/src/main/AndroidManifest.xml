@@ -5,6 +5,10 @@
          para ler o QR Code de uma transmissão. O aplicativo não é acessado e não lê arquivos do aparelho. -->
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
+    <!-- Do Android 12 em diante, o Ponte se atualiza sem a tela de confirmação do instalador (só a dele mesmo). -->
+    <uses-permission android:name="android.permission.UPDATE_PACKAGES_WITHOUT_USER_ACTION" />
+    <!-- Avisar que a atualização terminou ("toque para abrir"): o Android não deixa o Ponte se abrir sozinho. -->
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     <uses-permission android:name="android.permission.CAMERA" />
     <!-- Sem câmera o aplicativo continua servindo: o link da transmissão pode ser colado no campo de endereço. -->
     <uses-feature android:name="android.hardware.camera" android:required="false" />
@@ -70,6 +74,23 @@
             android:configChanges="orientation|screenSize|screenLayout|smallestScreenSize|keyboard|keyboardHidden|navigation|uiMode|density"
             android:exported="false"
             android:theme="@style/TemaSessao" />
+
+        <!-- A resposta do Android à instalação da atualização: confirmação, reabrir o Ponte ou o erro. Sem tela. -->
+        <activity
+            android:name=".AtualizacaoActivity"
+            android:excludeFromRecents="true"
+            android:exported="false"
+            android:noHistory="true"
+            android:theme="@android:style/Theme.Translucent.NoTitleBar" />
+
+        <!-- A versão nova, recém-instalada pela atualização pedida no aplicativo, avisa por notificação. -->
+        <receiver
+            android:name=".AtualizadoReceiver"
+            android:exported="false">
+            <intent-filter>
+                <action android:name="android.intent.action.MY_PACKAGE_REPLACED" />
+            </intent-filter>
+        </receiver>
 
         <!-- Entrega ao instalador do Android o APK da atualização baixada, e só ele. -->
         <provider

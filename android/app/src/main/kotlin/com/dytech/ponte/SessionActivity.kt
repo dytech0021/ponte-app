@@ -38,6 +38,8 @@ import ponte.core.Target
 /** A sessão: conecta, mostra a tela do computador e oferece os comandos em volta dela. */
 class SessionActivity : Activity() {
     private lateinit var store: Store
+    // O aviso de versão nova aparece também durante a sessão.
+    private lateinit var updates: UpdateFlow
     private lateinit var screen: RemoteView
     private lateinit var status: TextView
     private lateinit var notice: TextView
@@ -80,6 +82,7 @@ class SessionActivity : Activity() {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_session)
         store = Store(this)
+        updates = UpdateFlow(this, store)
         targetText = intent.getStringExtra(EXTRA_TARGET) ?: ""
         screen = findViewById(R.id.tela)
         status = findViewById(R.id.estado)
@@ -351,6 +354,20 @@ class SessionActivity : Activity() {
             .setPositiveButton("Desconectar") { _, _ -> leave() }
             .setNegativeButton("Continuar", null)
             .show()
+    }
+
+    override fun onResume() {
+        super.onResume()
+        updates.onResume()
+    }
+
+    override fun onPause() {
+        updates.onPause()
+        super.onPause()
+    }
+
+    override fun onRequestPermissionsResult(requestCode: Int, permissions: Array<out String>, grantResults: IntArray) {
+        if (!updates.onPermissionResult(requestCode)) super.onRequestPermissionsResult(requestCode, permissions, grantResults)
     }
 
     override fun onDestroy() {
