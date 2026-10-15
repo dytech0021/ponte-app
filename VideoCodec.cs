@@ -67,7 +67,9 @@ internal sealed record VideoSource(string Name, Rectangle Bounds, int Adapter = 
         var bounds = screen.Bounds;
         bounds.Width &= ~1;
         bounds.Height &= ~1;
-        if (DisplayOutputs.Find(screen.DeviceName) is { } dxgi) yield return new VideoSource("DXGI", bounds, dxgi.Adapter, dxgi.Output);
+        // Monitor girado (em pé): o DirectX entrega a imagem sem girar, e o FFmpeg (ddagrab) não a gira de volta; a
+        // captura sairia com a medida e a orientação erradas. A do GDI já vem como a tela aparece.
+        if (DisplayOutputs.Find(screen.DeviceName) is { Rotated: false } dxgi) yield return new VideoSource("DXGI", bounds, dxgi.Adapter, dxgi.Output);
         yield return new VideoSource("GDI", bounds);
     }
 }
@@ -92,7 +94,8 @@ internal static unsafe class DisplayOutputs
     private static IntPtr Method(IntPtr com, int slot) => (*(IntPtr**)com)[slot];
     private static void Release(IntPtr com) => ((delegate* unmanaged[Stdcall]<IntPtr, uint>)Method(com, 2))(com);
 
-    public static (int Adapter, int Output)? Find(string deviceName)
+    // DXGI_MODE_ROTATION: 0 = não informada, 1 = sem rotação, 2, 3 e 4 = girada 90°, 180° e 270°.
+    public static (int Adapter, int Output, bool Rotated)? Find(string deviceName)
     {
         var raw = stackalloc byte[Marshal.SizeOf<OutputDesc>()];
         try
@@ -116,7 +119,7 @@ internal static unsafe class DisplayOutputs
                                 if (((delegate* unmanaged[Stdcall]<IntPtr, byte*, int>)Method(output, 7))(output, raw) < 0) continue;
                                 var desc = Marshal.PtrToStructure<OutputDesc>((IntPtr)raw);
                                 if (desc.AttachedToDesktop != 0 && string.Equals(desc.DeviceName, deviceName, StringComparison.OrdinalIgnoreCase))
-                                    return ((int)a, (int)o);
+                                    return ((int)a, (int)o, desc.Rotation > 1);
                             }
                             finally { Release(output); }
                         }

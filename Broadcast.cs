@@ -35,6 +35,8 @@ internal sealed class Broadcast : IAsyncDisposable
     private readonly DateTime _started = DateTime.Now;
     // A captura pela placa (DXGI) falhou logo de cara: as próximas tentativas usam a do Windows (GDI).
     private bool _gdi;
+    private int _dxgiFailures;
+    private long _frames;   // quadros de vídeo que o FFmpeg já enviou nesta rodada (lido pelo cão de guarda)
 
     /// <summary>O código que vai no link (24 letras e números); o mesmo durante toda a transmissão.</summary>
     public string Token { get; private set; } = "";
@@ -170,12 +172,38 @@ internal sealed class Broadcast : IAsyncDisposable
         string? pipeName = _options.Sound ? $"ponte-transmissao-{Guid.NewGuid():N}" : null;
         using var pipe = pipeName is null ? null : new NamedPipeServerStream(pipeName, PipeDirection.Out, 1, PipeTransmissionMode.Byte, PipeOptions.Asynchronous, 0, 1 << 20);
         string url = $"rtsps://ponte:{_password}@{_server}:{MediaPort}/ao/{Token}";
+        var (outWidth, outHeight) = OutputSize(source.Bounds.Width, source.Bounds.Height, _options.Height);
+        SessionLog.Write($"transmissão: capturando pelo {source.Name} ({source.Bounds.Width}x{source.Bounds.Height}), enviando {outWidth}x{outHeight}");
         SetStatus("Conectando ao servidor...", false);
         using var process = new VideoProcess(Arguments(source, _options, _encoder, pipeName is null ? null : $@"\\.\pipe\{pipeName}", url));
         using var stopping = CancellationTokenSource.CreateLinkedTokenSource(ct);
         using var kill = stopping.Token.Register(process.Kill);
         var sound = pipe is null ? Task.CompletedTask : Task.Run(() => PumpSoundAsync(pipe, stopping.Token));
+        Interlocked.Exchange(ref _frames, 0);
         var progress = Task.Run(() => WatchProgressAsync(process.Process.StandardOutput, stopping.Token));
+        // Cão de guarda: o som pode continuar indo com a imagem parada (a captura da tela travou), e quem assiste fica
+        // em "conectando" para sempre. Sem quadro novo por 6 s (ou nenhum em 20 s), reinicia o envio.
+        bool stalled = false;
+        var watchdog = Task.Run(async () =>
+        {
+            long seen = 0, since = Stopwatch.GetTimestamp(), start = since;
+            while (!stopping.IsCancellationRequested)
+            {
+                await Task.Delay(1000, stopping.Token);
+                long now = Interlocked.Read(ref _frames);
+                if (now != seen)
+                {
+                    seen = now;
+                    since = Stopwatch.GetTimestamp();
+                }
+                else if (now > 0 ? Stopwatch.GetElapsedTime(since) > TimeSpan.FromSeconds(6) : Stopwatch.GetElapsedTime(start) > TimeSpan.FromSeconds(20))
+                {
+                    stalled = true;
+                    process.Kill();
+                    return;
+                }
+            }
+        });
         try
         {
             await process.Process.WaitForExitAsync(ct);
@@ -183,12 +211,21 @@ internal sealed class Broadcast : IAsyncDisposable
         finally
         {
             stopping.Cancel();
-            try { await Task.WhenAll(sound, progress); }
+            try { await Task.WhenAll(sound, progress, watchdog); }
             catch (Exception ex) when (ex is OperationCanceledException or IOException or ObjectDisposedException) { }
         }
         ct.ThrowIfCancellationRequested();
+        if (stalled)
+        {
+            // Imagem parada com a captura pelo DirectX: a próxima rodada usa a do GDI.
+            if (source.Dxgi) _gdi = true;
+            return $"a imagem da tela parou de sair (captura pelo {source.Name}, {Interlocked.Read(ref _frames)} quadros enviados)";
+        }
         string error = process.Error;
-        if (source.Dxgi && !Live && (error.Contains("ddagrab", StringComparison.OrdinalIgnoreCase) || error.Contains("d3d11", StringComparison.OrdinalIgnoreCase))) _gdi = true;
+        // A captura pelo DirectX falhou: antes de entrar no ar, ou duas vezes já no ar, passa para a do GDI.
+        if (source.Dxgi && (error.Contains("ddagrab", StringComparison.OrdinalIgnoreCase) || error.Contains("d3d11", StringComparison.OrdinalIgnoreCase)) &&
+            (!Live || ++_dxgiFailures >= 2))
+            _gdi = true;
         return error.Contains("401") || error.Contains("Unauthorized") ? "o servidor recusou a permissão de envio"
             : error.Length > 0 ? error : $"o FFmpeg terminou com o código {process.Process.ExitCode}";
     }
@@ -202,6 +239,7 @@ internal sealed class Broadcast : IAsyncDisposable
             if (!line.StartsWith("frame=", StringComparison.Ordinal) || !long.TryParse(line.AsSpan(6), out long now)) continue;
             if (now > frames && !Live) SetStatus("Ao vivo", true);
             frames = now;
+            Interlocked.Exchange(ref _frames, now);
         }
     }
 
@@ -273,8 +311,15 @@ internal sealed class Broadcast : IAsyncDisposable
         args.AddRange(["-c:v", encoder, "-pix_fmt", "nv12", "-colorspace", "bt709", "-color_primaries", "bt709", "-color_trc", "bt709",
             "-color_range", "tv", "-profile:v", "high", "-bf", "0", "-g", N(o.Fps * 2),
             "-b:v", N(bitrate), "-maxrate", N(bitrate), "-bufsize", N(bitrate)]);
-        if (encoder.EndsWith("_nvenc")) args.AddRange(["-preset", "p4", "-tune", "ll", "-rc", "cbr"]);
-        else if (encoder.EndsWith("_amf")) args.AddRange(["-usage", "lowlatency", "-quality", "balanced", "-rc", "cbr"]);
+        // Quadro completo (IDR) a cada 2 s, imposto quadro a quadro: alguns drivers ignoram o -g e, no modo de baixa
+        // latência, trocam os quadros completos por "atualização em faixas" (intra refresh). Quem entra na transmissão
+        // depois do começo nunca recebia um quadro de onde começar e ficava com a tela preta (visto com uma AMD em 15/10).
+        args.AddRange(["-force_key_frames", "expr:gte(t,n_forced*2)"]);
+        if (encoder.EndsWith("_nvenc")) args.AddRange(["-preset", "p4", "-tune", "ll", "-rc", "cbr", "-forced-idr", "1"]);
+        else if (encoder.EndsWith("_amf"))
+            args.AddRange(["-usage", "lowlatency", "-quality", "balanced", "-rc", "cbr", "-forced_idr", "1", "-intra_refresh_mb", "0",
+                "-header_spacing", N(o.Fps * 2)]);
+        else if (encoder.EndsWith("_qsv")) args.AddRange(["-preset", "veryfast", "-forced_idr", "1"]);
         else args.AddRange(["-preset", "veryfast"]);
         if (soundPipe is not null) args.AddRange(["-c:a", "libopus", "-b:a", "128k", "-ar", "48000", "-ac", "2"]);
         // O certificado do servidor é conferido pelo Windows: a senha do envio só vai para o servidor de verdade.

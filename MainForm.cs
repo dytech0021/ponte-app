@@ -23,8 +23,8 @@ internal sealed class MainForm : Form
     private UpdateManifest? _pendingUpdate;
     private string _pendingFile = "";
     private bool _checkingUpdate, _restarting, _closed, _applyingUpdate;
-    // Versão nova pronta enquanto alguém usa o Ponte: o aviso e o botão "Atualizar agora".
-    private readonly Button _updateNow;
+    // "Procurar atualização", que vira "Atualizar agora" com a versão nova pronta (e o aviso perto do relógio).
+    private readonly Button _checkUpdate;
     private string _offeredVersion = "";
     private bool _balloonOffersUpdate;
     private readonly List<StreamViewerForm> _streams = new();
@@ -130,9 +130,13 @@ internal sealed class MainForm : Form
         _version = Ui.Text(this, "", 14, 538, 424);
         _version.ForeColor = SystemColors.GrayText;
         _version.AutoEllipsis = true;
-        _updateNow = Ui.Button(this, "Atualizar agora", 318, 532, 120);
-        _updateNow.Visible = false;
-        _updateNow.Click += (_, _) => UpdateNow();
+        _version.Width = 284;
+        _checkUpdate = Ui.Button(this, "Procurar atualização", 302, 532, 140);
+        _checkUpdate.Click += (_, _) =>
+        {
+            if (_pendingUpdate is not null) UpdateNow();
+            else _ = CheckForUpdateAsync(manual: true);
+        };
         if (!Elevation.IsElevated)
         {
             // Sem isso o Windows bloqueia mouse e teclado em janelas de programas abertos como administrador.
@@ -227,19 +231,42 @@ internal sealed class MainForm : Form
         Close();
     }
 
-    private async Task CheckForUpdateAsync()
+    /// <summary>
+    /// Procura a versão nova, baixa e confere. [manual] é o botão "Procurar atualização" (ou o menu do ícone): avisa
+    /// também quando não há nada ou deu errado, e pergunta na hora se quer atualizar.
+    /// </summary>
+    private async Task CheckForUpdateAsync(bool manual = false)
     {
-        if (_checkingUpdate || _restarting || _pendingUpdate is not null) return;
+        if (_restarting) return;
+        if (_pendingUpdate is { } ready)
+        {
+            if (manual) AskToUpdate(ready);
+            return;
+        }
+        if (_checkingUpdate)
+        {
+            if (manual) _status.Text = "Já estou procurando a atualização...";
+            return;
+        }
+        if (manual && !Updater.CanSelfUpdate)
+        {
+            _status.Text = "Esta cópia do Ponte não se atualiza sozinha (só o Ponte.exe publicado, de arquivo único, se atualiza).";
+            return;
+        }
         _checkingUpdate = true;
+        _checkUpdate.Enabled = false;
+        if (manual) _status.Text = "Procurando atualização...";
         try
         {
             var manifest = await Updater.CheckAsync(_config, CancellationToken.None);
             if (manifest is null)
             {
                 ShowVersion("versão mais recente");
+                if (manual) _status.Text = $"Você já está com a versão mais recente do Ponte ({Updater.Current}).";
                 return;
             }
             ShowVersion($"baixando a versão {manifest.Version}");
+            if (manual) _status.Text = $"Baixando a versão {manifest.Version}...";
             string file = await Updater.DownloadAsync(_config, manifest, CancellationToken.None);
             // O teste de partida da versão nova roda fora da janela, que continua respondendo: com ela parada
             // esperando, a versão nova (até a 1.6.1) travava ao aplicar o tema, que avisa todas as janelas da troca
@@ -248,12 +275,15 @@ internal sealed class MainForm : Form
             await Task.Run(() => Updater.Verify(file, manifest));
             _pendingFile = file;
             _pendingUpdate = manifest;
-            await ApplyUpdateAsync(force: false);
+            if (manual) AskToUpdate(manifest);
+            else await ApplyUpdateAsync(force: false);
         }
         catch (Exception ex) when (ex is PonteException or IOException or UnauthorizedAccessException)
         {
             // Falha de atualização não atrapalha o uso: fica registrada na linha de versão e tenta de novo em 5 minutos.
-            ShowVersion((ex is PonteException ? ex.Message : "não foi possível gravar a atualização nesta pasta") + " Nova tentativa em 5 minutos.");
+            string problem = ex is PonteException ? ex.Message : "não foi possível gravar a atualização nesta pasta";
+            ShowVersion(problem + " Nova tentativa em 5 minutos.");
+            if (manual) _status.Text = $"Não foi possível atualizar agora: {problem}";
             _updateTimer.Stop();
             _updateTimer.Interval = 5 * 60 * 1000;
             _updateTimer.Start();
@@ -261,6 +291,7 @@ internal sealed class MainForm : Form
         finally
         {
             _checkingUpdate = false;
+            _checkUpdate.Enabled = true;
         }
     }
 
@@ -290,8 +321,7 @@ internal sealed class MainForm : Form
         catch (PonteException ex)
         {
             _pendingUpdate = null;
-            _updateNow.Visible = false;
-            _version.Width = 424;
+            _checkUpdate.Text = "Procurar atualização";
             ShowVersion(ex.Message + " Nova tentativa em 5 minutos.");
             _updateTimer.Stop();
             _updateTimer.Interval = 5 * 60 * 1000;
@@ -305,8 +335,7 @@ internal sealed class MainForm : Form
 
     private void OfferUpdate(UpdateManifest update)
     {
-        _updateNow.Visible = true;
-        _version.Width = 296;
+        _checkUpdate.Text = "Atualizar agora";
         ShowVersion($"versão {update.Version} pronta");
         _status.Text = $"Chegou a versão {update.Version} do Ponte. Clique em \"Atualizar agora\": o Ponte fecha e abre de novo já atualizado.";
         // O aviso perto do relógio aparece uma vez por versão; o botão fica na janela até a troca.
@@ -317,23 +346,49 @@ internal sealed class MainForm : Form
             $"A versão {update.Version} está pronta. Clique aqui para atualizar agora: o Ponte fecha e abre de novo atualizado.", ToolTipIcon.Info);
     }
 
+    /// <summary>O que uma atualização agora encerraria, em português corrido ("" quando não há nada).</summary>
+    private string WhatEnds()
+    {
+        var ending = new List<string>();
+        if (_host.Current is { } session) ending.Add($"a sessão de {session.PeerName} neste computador");
+        if (_viewers.Count > 0) ending.Add(_viewers.Count == 1 ? "o acesso ao outro computador" : $"os {_viewers.Count} acessos a outros computadores");
+        if (_broadcastDialog is { Active: true }) ending.Add("a transmissão da tela");
+        if (_streams.Count > 0) ending.Add("a transmissão que você está assistindo");
+        return ending.Count switch
+        {
+            0 => "",
+            1 => ending[0],
+            _ => string.Join(", ", ending.Take(ending.Count - 1)) + " e " + ending[^1],
+        };
+    }
+
+    // "Atualizar agora" (botão ou aviso perto do relógio): só pergunta se houver algo a encerrar.
     private async void UpdateNow()
     {
         if (_pendingUpdate is not { } update || _restarting || _applyingUpdate) return;
-        if (!Idle)
+        string ending = WhatEnds();
+        if (ending.Length > 0)
         {
-            var ending = new List<string>();
-            if (_host.Current is { } session) ending.Add($"a sessão de {session.PeerName} neste computador");
-            if (_viewers.Count > 0) ending.Add(_viewers.Count == 1 ? "o acesso ao outro computador" : $"os {_viewers.Count} acessos a outros computadores");
-            if (_broadcastDialog is { Active: true }) ending.Add("a transmissão da tela");
-            if (_streams.Count > 0) ending.Add("a transmissão que você está assistindo");
-            string list = ending.Count == 1 ? ending[0] : string.Join(", ", ending.Take(ending.Count - 1)) + " e " + ending[^1];
             ShowFromTray();
-            if (MessageBox.Show(this, $"Atualizar agora encerra {list}. O Ponte fecha e abre de novo na versão {update.Version}.\n\nAtualizar agora?",
+            if (MessageBox.Show(this, $"Atualizar agora encerra {ending}. O Ponte fecha e abre de novo na versão {update.Version}.\n\nAtualizar agora?",
                     "Ponte", MessageBoxButtons.YesNo, MessageBoxIcon.Question) != DialogResult.Yes)
                 return;
         }
         await ApplyUpdateAsync(force: true);
+    }
+
+    // Procurada à mão e encontrada: pergunta já (quem procurou quer saber), dizendo o que a troca encerraria.
+    private async void AskToUpdate(UpdateManifest update)
+    {
+        if (_restarting || _applyingUpdate) return;
+        string ending = WhatEnds();
+        ShowFromTray();
+        var answer = MessageBox.Show(this,
+            $"A versão {update.Version} do Ponte está pronta (esta é a {Updater.Current}).{(ending.Length > 0 ? $"\n\nAtualizar agora encerra {ending}." : "")}\n\n" +
+            "O Ponte fecha e abre de novo já atualizado. Atualizar agora?",
+            "Ponte", MessageBoxButtons.YesNo, MessageBoxIcon.Question);
+        if (answer == DialogResult.Yes) await ApplyUpdateAsync(force: true);
+        else OfferUpdate(update);
     }
 
     // ---------- este computador sendo acessado ----------
@@ -676,6 +731,12 @@ internal sealed class MainForm : Form
         {
             try { Clipboard.SetText(Security.FormatId(_config.Id)); }
             catch (System.Runtime.InteropServices.ExternalException) { }
+        });
+        menu.Items.Add("Procurar atualização", null, (_, _) =>
+        {
+            ShowFromTray();
+            if (_pendingUpdate is not null) UpdateNow();
+            else _ = CheckForUpdateAsync(manual: true);
         });
         menu.Items.Add(new ToolStripSeparator());
         menu.Items.Add("Fechar o Ponte", null, (_, _) => Close());
