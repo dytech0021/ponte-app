@@ -1,0 +1,13 @@
+namespace Ponte;
+
+/// <summary>
+/// Servidor de retransmissão usado quando o usuário não configura outro. A chave só impede que
+/// estranhos usem o servidor; a proteção da sessão é o TLS de ponta a ponta, não ela.
+/// </summary>
+internal static class RelayDefaults
+{
+    // Copie este arquivo para RelayDefaults.cs (que fica fora do git) e preencha.
+    // A chave é a mesma de PONTE_KEY em /etc/ponte-relay.env no servidor.
+    public const string Server = "exemplo.com.br:7412";
+    public const string Key = "";
+}

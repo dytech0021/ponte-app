@@ -1,0 +1,14 @@
+[
+  {
+    "relation": [
+      "delegate_permission/common.handle_all_urls"
+    ],
+    "target": {
+      "namespace": "android_app",
+      "package_name": "com.dytech.ponte",
+      "sha256_cert_fingerprints": [
+        "07:CC:51:A2:43:74:EB:5A:47:20:44:84:8C:7E:22:01:51:70:68:33:38:19:1F:EC:D3:D8:95:91:64:D0:8A:15"
+      ]
+    }
+  }
+]

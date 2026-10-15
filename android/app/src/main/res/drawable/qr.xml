@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Um QR Code pequeno, para o botão de assistir a uma transmissão. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp" android:height="24dp"
+    android:viewportWidth="24" android:viewportHeight="24">
+    <path android:fillColor="@color/destaque" android:fillType="evenOdd"
+        android:pathData="M3,3h8v8h-8z M4.6,4.6v4.8h4.8v-4.8z M5.8,5.8h2.4v2.4h-2.4z
+            M13,3h8v8h-8z M14.6,4.6v4.8h4.8v-4.8z M15.8,5.8h2.4v2.4h-2.4z
+            M3,13h8v8h-8z M4.6,14.6v4.8h4.8v-4.8z M5.8,15.8h2.4v2.4h-2.4z" />
+    <path android:fillColor="@color/destaque"
+        android:pathData="M13,13h3v3h-3z M18,13h3v3h-3z M16,16h2v2h-2z M13,18h3v3h-3z M18,18h3v3h-3z" />
+</vector>

@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <color name="destaque">#61D2DF</color>
+    <color name="fundo">#121A1D</color>
+    <color name="cartao">#202B30</color>
+    <color name="contorno">#46565E</color>
+    <color name="texto">#EDF4F6</color>
+    <color name="texto_secundario">#B4C3CA</color>
+    <color name="toque">#3361D2DF</color>
+    <color name="perigo">#F2B8B5</color>
+</resources>

@@ -1,0 +1,63 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="wrap_content"
+    android:layout_marginTop="8dp"
+    android:background="@drawable/linha_computador"
+    android:elevation="1dp"
+    android:gravity="center_vertical"
+    android:minHeight="64dp"
+    android:orientation="horizontal"
+    android:paddingStart="12dp"
+    android:paddingTop="10dp"
+    android:paddingEnd="12dp"
+    android:paddingBottom="10dp">
+
+    <ImageView
+        android:id="@+id/miniatura"
+        android:layout_width="72dp"
+        android:layout_height="48dp"
+        android:layout_marginEnd="12dp"
+        android:background="@drawable/campo"
+        android:clipToOutline="true"
+        android:importantForAccessibility="no"
+        android:padding="12dp"
+        android:scaleType="fitCenter"
+        android:src="@drawable/monitor" />
+
+    <LinearLayout
+        android:layout_width="0dp"
+        android:layout_height="wrap_content"
+        android:layout_weight="1"
+        android:orientation="vertical">
+
+        <TextView
+            android:id="@+id/nome"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:drawablePadding="6dp"
+            android:ellipsize="end"
+            android:singleLine="true"
+            android:textColor="@color/texto"
+            android:textSize="17sp"
+            android:textStyle="bold" />
+
+        <TextView
+            android:id="@+id/endereco"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="2dp"
+            android:ellipsize="end"
+            android:singleLine="true"
+            android:textColor="@color/texto_secundario"
+            android:textSize="14sp" />
+
+        <TextView
+            android:id="@+id/estado"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="2dp"
+            android:textColor="@color/texto_secundario"
+            android:textSize="13sp" />
+    </LinearLayout>
+</LinearLayout>

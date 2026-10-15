@@ -1,0 +1,22 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net10.0-windows</TargetFramework>
+    <UseWindowsForms>true</UseWindowsForms>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <AssemblyName>Ponte</AssemblyName>
+    <RootNamespace>Ponte</RootNamespace>
+    <Version>1.8.1</Version>
+    <Product>Ponte</Product>
+    <Description>Acesso remoto entre computadores</Description>
+    <ApplicationHighDpiMode>PerMonitorV2</ApplicationHighDpiMode>
+    <ApplicationVisualStyles>true</ApplicationVisualStyles>
+    <SatelliteResourceLanguages>en</SatelliteResourceLanguages>
+    <!-- O aplicativo Android, a documentação e o servidor moram na mesma pasta e não fazem parte deste executável. -->
+    <DefaultItemExcludes>$(DefaultItemExcludes);android\**;docs\**;relay\**;pronto\**;capturas\**;chaves\**;web\**;video-runtime\**</DefaultItemExcludes>
+  </PropertyGroup>
+
+</Project>

@@ -1,0 +1,74 @@
+<?xml version="1.0" encoding="utf-8"?>
+<FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:id="@+id/raiz"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:background="@color/sessao_fundo">
+
+    <com.dytech.ponte.RemoteView
+        android:id="@+id/tela"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent" />
+
+    <!-- Barra de comandos, no alto. O botão da ponta a recolhe. -->
+    <HorizontalScrollView
+        android:id="@+id/barraRolagem"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_gravity="top|center_horizontal"
+        android:layout_marginTop="6dp"
+        android:scrollbars="none">
+
+        <LinearLayout
+            android:id="@+id/barra"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:orientation="horizontal"
+            android:paddingStart="6dp"
+            android:paddingEnd="6dp" />
+    </HorizontalScrollView>
+
+    <!-- Teclas que o teclado do celular não tem. Fica logo acima dele. -->
+    <HorizontalScrollView
+        android:id="@+id/teclasRolagem"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_gravity="bottom"
+        android:layout_marginBottom="6dp"
+        android:scrollbars="none"
+        android:visibility="gone">
+
+        <LinearLayout
+            android:id="@+id/teclas"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:orientation="horizontal"
+            android:paddingStart="6dp"
+            android:paddingEnd="6dp" />
+    </HorizontalScrollView>
+
+    <TextView
+        android:id="@+id/estado"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_gravity="center"
+        android:layout_margin="24dp"
+        android:gravity="center"
+        android:text="Conectando..."
+        android:textColor="#E0E0E0"
+        android:textSize="17sp" />
+
+    <TextView
+        android:id="@+id/aviso"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_gravity="bottom|center_horizontal"
+        android:layout_marginStart="16dp"
+        android:layout_marginEnd="16dp"
+        android:layout_marginBottom="64dp"
+        android:background="@drawable/aviso"
+        android:padding="12dp"
+        android:textColor="#FFFFFF"
+        android:textSize="14sp"
+        android:visibility="gone" />
+</FrameLayout>

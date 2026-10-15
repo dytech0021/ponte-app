@@ -1,0 +1,23 @@
+# Saídas de compilação e o executável pronto
+bin/
+obj/
+pronto/
+
+# Capturas de tela dos modos de verificação (a da sessão mostra a área de trabalho de quem rodou)
+capturas/
+
+# Segredos: a chave que assina as atualizações e a chave de acesso do servidor de retransmissão
+chaves/
+RelayDefaults.cs
+
+# Sobras da troca de executável na atualização
+*.antigo
+Ponte-novo.exe
+
+# Runtime gerado e evidências locais dos testes de vídeo
+video-runtime/*.zip
+video-runtime/*.gz
+video-runtime/*.ts
+video-runtime/download.json
+video-runtime/ffmpeg-*/
+video-runtime/test-results/

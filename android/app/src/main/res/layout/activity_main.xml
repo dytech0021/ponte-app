@@ -1,0 +1,172 @@
+<?xml version="1.0" encoding="utf-8"?>
+<ScrollView xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:fillViewport="true"
+    android:fitsSystemWindows="true">
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="vertical"
+        android:padding="20dp">
+
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:gravity="center_vertical"
+            android:orientation="horizontal">
+
+            <LinearLayout
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:orientation="vertical">
+
+                <TextView
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="Ponte"
+                    android:textColor="@color/destaque"
+                    android:textSize="30sp"
+                    android:textStyle="bold" />
+
+                <TextView
+                    android:id="@+id/versao"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:textColor="@color/texto_secundario"
+                    android:textSize="13sp" />
+
+                <TextView
+                    android:id="@+id/conta"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:background="?android:attr/selectableItemBackground"
+                    android:minHeight="32dp"
+                    android:gravity="center_vertical"
+                    android:text="Entrar na conta"
+                    android:textColor="@color/destaque"
+                    android:textSize="14sp" />
+            </LinearLayout>
+
+            <TextView
+                android:id="@+id/menu"
+                android:layout_width="48dp"
+                android:layout_height="48dp"
+                android:background="?android:attr/selectableItemBackgroundBorderless"
+                android:contentDescription="Menu"
+                android:gravity="center"
+                android:text="⋮"
+                android:textColor="@color/texto"
+                android:textSize="26sp" />
+        </LinearLayout>
+
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="20dp"
+            android:background="@drawable/cartao"
+            android:elevation="1dp"
+            android:orientation="vertical"
+            android:padding="16dp">
+
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="Endereço do computador (ID ou IP)"
+                android:textColor="@color/texto_secundario"
+                android:textSize="14sp" />
+
+            <EditText
+                android:id="@+id/endereco"
+                android:layout_width="match_parent"
+                android:layout_height="52dp"
+                android:layout_marginTop="8dp"
+                android:background="@drawable/campo"
+                android:hint="123 456 789"
+                android:imeOptions="actionGo"
+                android:importantForAutofill="no"
+                android:inputType="textVisiblePassword|textNoSuggestions"
+                android:paddingStart="14dp"
+                android:paddingEnd="14dp"
+                android:singleLine="true"
+                android:textColor="@color/texto"
+                android:textSize="20sp" />
+
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="14dp"
+                android:orientation="horizontal">
+
+                <Button
+                    android:id="@+id/conectar"
+                    style="@style/BotaoPrincipal"
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_weight="1"
+                    android:text="Conectar" />
+
+                <Button
+                    android:id="@+id/salvar"
+                    style="@style/BotaoSecundario"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:layout_marginStart="10dp"
+                    android:paddingStart="20dp"
+                    android:paddingEnd="20dp"
+                    android:text="Salvar" />
+            </LinearLayout>
+        </LinearLayout>
+
+        <!-- Lê o QR Code da janela "Transmitir a tela" do computador e assiste aqui. -->
+        <Button
+            android:id="@+id/assistir"
+            style="@style/BotaoSecundario"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="12dp"
+            android:drawableStart="@drawable/qr"
+            android:drawablePadding="10dp"
+            android:paddingStart="16dp"
+            android:paddingEnd="16dp"
+            android:text="Assistir transmissão" />
+
+        <TextView
+            style="@style/TituloDeSecao"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="28dp"
+            android:text="COMPUTADORES SALVOS" />
+
+        <TextView
+            android:id="@+id/salvosVazio"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="8dp"
+            android:text="Nenhum ainda. Digite o endereço e toque em Salvar para guardar um computador com nome e, depois de autorizado lá, entrar sem aprovação."
+            android:textColor="@color/texto_secundario"
+            android:textSize="14sp" />
+
+        <LinearLayout
+            android:id="@+id/salvos"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="vertical" />
+
+        <TextView
+            android:id="@+id/recentesTitulo"
+            style="@style/TituloDeSecao"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="28dp"
+            android:text="CONEXÕES RECENTES" />
+
+        <LinearLayout
+            android:id="@+id/recentes"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="vertical" />
+    </LinearLayout>
+</ScrollView>

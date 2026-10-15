@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- O mesmo verde-azulado do Ponte do Windows. -->
+    <color name="destaque">#006978</color>
+    <color name="destaque_pressionado">#00525E</color>
+    <color name="destaque_claro">#4FC3D4</color>
+    <color name="botao">#006978</color>
+    <color name="texto_botao">#FFFFFF</color>
+    <color name="toque">#22006978</color>
+    <color name="fundo">#F3F5F6</color>
+    <color name="cartao">#FFFFFF</color>
+    <color name="contorno">#D5DBDF</color>
+    <color name="texto">#1B1F22</color>
+    <color name="texto_secundario">#5F6B72</color>
+    <color name="sessao_fundo">#1E1E1E</color>
+    <color name="barra">#CC202428</color>
+    <color name="barra_ativa">#FF006978</color>
+    <color name="perigo">#B3261E</color>
+</resources>

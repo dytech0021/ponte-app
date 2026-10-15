@@ -1,0 +1,74 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#006978">
+  <meta name="color-scheme" content="light dark">
+  <!-- Adicionado à Tela de Início do iPhone, abre como aplicativo: sem a barra do Safari. -->
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="default">
+  <meta name="apple-mobile-web-app-title" content="Ponte">
+  <meta name="format-detection" content="telephone=no">
+  <title>Ponte</title>
+  <link rel="manifest" href="manifest.webmanifest">
+  <link rel="apple-touch-icon" href="icone-180.png">
+  <link rel="icon" type="image/png" href="icone-192.png">
+  <link rel="stylesheet" href="app.css">
+  <script type="module" src="app.js"></script>
+</head>
+<body>
+  <main id="inicio">
+    <header class="topo">
+      <div class="topo-textos">
+        <h1>Ponte</h1>
+        <p id="versao" class="fraco"></p>
+      </div>
+      <button id="menu" class="icone" type="button" aria-label="Menu">⋮</button>
+    </header>
+
+    <div id="instalar" class="aviso" hidden>
+      <p>Para usar como aplicativo: toque em <strong>Compartilhar</strong> <span aria-hidden="true">(□↑)</span> e depois em
+        <strong>Adicionar à Tela de Início</strong>.</p>
+      <button type="button" class="link" id="instalar-fechar">Entendi</button>
+    </div>
+
+    <form id="conectar" class="cartao" autocomplete="off">
+      <label for="endereco" class="fraco">ID do computador</label>
+      <input id="endereco" type="text" inputmode="numeric" placeholder="123 456 789" maxlength="11" enterkeyhint="go"
+        autocomplete="off" autocorrect="off" spellcheck="false">
+      <p id="endereco-erro" class="erro" hidden></p>
+      <div class="linha">
+        <button type="submit" class="principal">Conectar</button>
+        <button type="button" id="salvar" class="secundario">Salvar</button>
+      </div>
+    </form>
+
+    <h2>Computadores salvos</h2>
+    <p id="salvos-vazio" class="fraco vazio">Nenhum computador salvo ainda. Digite o ID e toque em Salvar.</p>
+    <ul id="salvos" class="lista"></ul>
+
+    <h2 id="recentes-titulo" hidden>Conexões recentes</h2>
+    <ul id="recentes" class="lista"></ul>
+  </main>
+
+  <section id="sessao" hidden>
+    <canvas id="tela" aria-label="Tela do computador"></canvas>
+    <p id="sessao-estado" class="estado" role="status"></p>
+    <p id="sessao-aviso" class="toast" role="status" hidden></p>
+    <!-- Fica fora da vista: é ele que abre o teclado do celular e recebe o que é digitado. -->
+    <textarea id="digitar" aria-label="Teclado" autocapitalize="off" autocomplete="off" autocorrect="off" spellcheck="false"></textarea>
+    <div id="teclas" class="teclas" hidden></div>
+    <nav class="barra">
+      <button type="button" id="b-teclado">Teclado</button>
+      <button type="button" id="b-teclas">Teclas</button>
+      <button type="button" id="b-modo">Toque</button>
+      <button type="button" id="b-mais">Mais</button>
+      <button type="button" id="b-sair">Sair</button>
+    </nav>
+  </section>
+
+  <dialog id="dialogo"></dialog>
+</body>
+</html>

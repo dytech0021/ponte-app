@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Activity, diálogos, menus e campos continuam sendo os widgets nativos do Android. -->
+    <style name="Tema" parent="android:Theme.Material.NoActionBar">
+        <item name="android:colorAccent">@color/destaque</item>
+        <item name="android:colorPrimary">@color/destaque</item>
+        <item name="android:windowBackground">@color/fundo</item>
+        <item name="android:statusBarColor">@color/fundo</item>
+        <item name="android:navigationBarColor">@color/fundo</item>
+        <item name="android:windowLightStatusBar">false</item>
+        <item name="android:textColorPrimary">@color/texto</item>
+        <item name="android:textColorSecondary">@color/texto_secundario</item>
+    </style>
+</resources>

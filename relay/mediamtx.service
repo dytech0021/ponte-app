@@ -1,0 +1,21 @@
+# Servidor de mídia da transmissão de tela do Ponte. Fica em /etc/systemd/system/mediamtx.service.
+[Unit]
+Description=Ponte - servidor de midia da transmissao de tela (MediaMTX)
+After=network-online.target ponte-relay.service
+Wants=network-online.target
+
+[Service]
+User=mediamtx
+Group=mediamtx
+ExecStart=/opt/mediamtx/atual/mediamtx /etc/mediamtx/mediamtx.yml
+Restart=on-failure
+RestartSec=3
+MemoryMax=200M
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+ReadOnlyPaths=/etc/mediamtx
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,214 @@
+/* Ponte no navegador: as mesmas cores do aplicativo Android e do Windows, no tema claro e no escuro. */
+:root {
+  --destaque: #006978;
+  --destaque-forte: #00525e;
+  --botao: #006978;
+  --texto-botao: #ffffff;
+  --fundo: #f3f5f6;
+  --cartao: #ffffff;
+  --contorno: #d5dbdf;
+  --texto: #1b1f22;
+  --fraco: #5f6b72;
+  --perigo: #b3261e;
+  --online: #2eba5c;
+  --offline: #e03e3e;
+  --sessao: #1e1e1e;
+  --barra: rgba(32, 36, 40, 0.88);
+  color-scheme: light;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --destaque: #61d2df;
+    --destaque-forte: #8ee3ec;
+    --fundo: #121a1d;
+    --cartao: #202b30;
+    --contorno: #46565e;
+    --texto: #edf4f6;
+    --fraco: #b4c3ca;
+    --perigo: #f2b8b5;
+    color-scheme: dark;
+  }
+}
+
+* { box-sizing: border-box; }
+
+html, body {
+  margin: 0;
+  background: var(--fundo);
+  color: var(--texto);
+  font: 16px/1.4 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  -webkit-text-size-adjust: 100%;
+  -webkit-tap-highlight-color: transparent;
+}
+
+button, input, textarea, select { font: inherit; color: inherit; }
+button { cursor: pointer; }
+[hidden] { display: none !important; }
+
+/* ---------- tela inicial ---------- */
+
+#inicio {
+  max-width: 560px;
+  margin: 0 auto;
+  padding: calc(env(safe-area-inset-top) + 20px) calc(env(safe-area-inset-right) + 16px)
+           calc(env(safe-area-inset-bottom) + 24px) calc(env(safe-area-inset-left) + 16px);
+}
+
+.topo { display: flex; align-items: flex-start; gap: 8px; }
+.topo-textos { flex: 1; min-width: 0; }
+h1 { margin: 0; font-size: 30px; font-weight: 700; color: var(--destaque); }
+h2 {
+  margin: 28px 0 8px;
+  font-size: 13px; font-weight: 600; letter-spacing: 0.08em; text-transform: uppercase; color: var(--fraco);
+}
+.fraco { color: var(--fraco); }
+#versao { margin: 2px 0 0; font-size: 13px; }
+
+.icone {
+  width: 44px; height: 44px; flex: none;
+  border: 0; border-radius: 22px; background: transparent;
+  font-size: 26px; line-height: 44px; color: var(--texto);
+}
+.icone:active { background: var(--contorno); }
+
+.cartao {
+  margin-top: 20px; padding: 16px;
+  background: var(--cartao); border-radius: 16px;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.08);
+}
+.cartao label { display: block; font-size: 14px; }
+
+#endereco, .campo {
+  display: block; width: 100%; height: 52px; margin-top: 8px; padding: 0 14px;
+  border: 1px solid var(--contorno); border-radius: 12px; background: var(--fundo);
+  font-size: 20px; letter-spacing: 0.02em;
+}
+.campo { height: 46px; font-size: 17px; letter-spacing: 0; }
+#endereco:focus, .campo:focus { outline: 2px solid var(--destaque); outline-offset: -1px; }
+
+.linha { display: flex; gap: 10px; margin-top: 14px; }
+.principal, .secundario {
+  min-height: 48px; padding: 0 20px; border-radius: 12px; font-weight: 600; font-size: 16px;
+}
+.principal { flex: 1; border: 0; background: var(--botao); color: var(--texto-botao); }
+.principal:active { background: var(--destaque-forte); }
+.secundario { border: 1px solid var(--destaque); background: transparent; color: var(--destaque); }
+.link { border: 0; background: none; padding: 6px 0; color: var(--destaque); font-weight: 600; }
+.erro { margin: 8px 0 0; color: var(--perigo); font-size: 14px; }
+.vazio { margin: 0; font-size: 14px; }
+
+.aviso {
+  margin-top: 16px; padding: 12px 14px;
+  background: var(--cartao); border-left: 4px solid var(--destaque); border-radius: 12px; font-size: 14px;
+}
+.aviso p { margin: 0 0 4px; }
+
+/* Página de baixar o aplicativo */
+.botao-link { display: flex; align-items: center; justify-content: center; margin-top: 14px; text-decoration: none; }
+.passos { margin: 16px 0 0; padding-left: 22px; font-size: 15px; }
+.passos li { margin: 6px 0; }
+.centro { text-align: center; margin-top: 20px; }
+
+.lista { list-style: none; margin: 0; padding: 0; }
+.item {
+  display: flex; align-items: center; margin-top: 8px;
+  background: var(--cartao); border-radius: 14px; box-shadow: 0 1px 2px rgba(0, 0, 0, 0.08);
+}
+.item-abrir {
+  flex: 1; min-width: 0; display: flex; align-items: center; gap: 12px;
+  padding: 10px 4px 10px 12px; border: 0; background: none; text-align: left;
+}
+.item-abrir:active { opacity: 0.7; }
+.miniatura {
+  flex: none; width: 72px; height: 48px; border-radius: 8px; background: var(--fundo);
+  display: grid; place-items: center; color: var(--fraco);
+}
+.miniatura svg { width: 30px; height: 30px; }
+.item-textos { min-width: 0; display: flex; flex-direction: column; }
+.item-nome { display: flex; align-items: center; gap: 6px; min-width: 0; font-size: 17px; font-weight: 700; }
+.item-nome span:first-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.item-endereco, .item-estado { font-size: 14px; color: var(--fraco); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.item-estado { font-size: 13px; }
+.item-estado.destaque { color: var(--destaque); }
+.item-mais {
+  flex: none; width: 44px; align-self: stretch; border: 0; background: none;
+  font-size: 22px; color: var(--fraco); border-radius: 0 14px 14px 0;
+}
+
+/* Verde: o Ponte está aberto lá agora. Vermelha: não está. */
+.bolinha { flex: none; width: 16px; height: 16px; border-radius: 50%; }
+.bolinha.on { background: var(--online); }
+.bolinha.off { background: var(--offline); }
+
+/* ---------- janelas ---------- */
+
+dialog {
+  width: min(420px, calc(100vw - 32px)); max-height: calc(100dvh - 48px); padding: 0;
+  border: 0; border-radius: 18px; background: var(--cartao); color: var(--texto);
+  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.3);
+}
+dialog::backdrop { background: rgba(0, 0, 0, 0.45); }
+.janela { padding: 20px; overflow: auto; max-height: calc(100dvh - 48px); }
+.janela h3 { margin: 0 0 8px; font-size: 19px; }
+.janela p { margin: 6px 0; white-space: pre-line; }
+.janela .nota { font-size: 14px; color: var(--fraco); }
+.janela .marcar { display: flex; gap: 10px; align-items: flex-start; margin-top: 12px; }
+.janela .marcar input { width: 22px; height: 22px; margin: 1px 0 0; accent-color: var(--destaque); }
+.botoes { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 8px; margin-top: 18px; }
+.botoes button { min-height: 44px; padding: 0 16px; border-radius: 10px; border: 0; background: transparent; color: var(--destaque); font-weight: 600; }
+.botoes button.forte { background: var(--botao); color: var(--texto-botao); }
+.botoes button.perigo { color: var(--perigo); }
+.opcoes { display: flex; flex-direction: column; margin: 8px -20px 0; }
+.opcoes button {
+  min-height: 50px; padding: 0 20px; border: 0; border-top: 1px solid var(--contorno);
+  background: none; text-align: left; font-size: 17px;
+}
+.opcoes:first-child { margin-top: -12px; }
+.opcoes:first-child button:first-child { border-top: 0; }
+.opcoes button.marcado { color: var(--destaque); font-weight: 700; }
+.opcoes button.perigo { color: var(--perigo); }
+
+/* ---------- sessão ---------- */
+
+body.em-sessao { overflow: hidden; overscroll-behavior: none; }
+
+#sessao {
+  position: fixed; left: 0; top: 0; width: 100%; height: 100dvh;
+  display: flex; flex-direction: column; background: var(--sessao); color: #fff;
+}
+#tela { flex: 1; width: 100%; min-height: 0; display: block; touch-action: none; user-select: none; -webkit-user-select: none; -webkit-touch-callout: none; }
+
+.estado {
+  position: absolute; left: 50%; top: 40%; transform: translate(-50%, -50%);
+  max-width: min(420px, 90vw); margin: 0; text-align: center; color: #d8dee2; pointer-events: none; white-space: pre-line;
+}
+.toast {
+  position: absolute; left: 50%; top: calc(env(safe-area-inset-top) + 12px); transform: translateX(-50%);
+  max-width: min(480px, 92vw); margin: 0; padding: 10px 14px; border-radius: 12px;
+  background: rgba(0, 0, 0, 0.78); color: #fff; font-size: 14px; pointer-events: none;
+}
+
+#digitar {
+  position: absolute; left: 0; bottom: 0; width: 1px; height: 1px; padding: 0; border: 0;
+  opacity: 0; resize: none; font-size: 16px; /* 16 px: o iPhone não amplia a página ao focar */
+}
+
+.teclas {
+  display: flex; flex-wrap: wrap; gap: 6px; padding: 8px calc(env(safe-area-inset-right) + 8px) 0 calc(env(safe-area-inset-left) + 8px);
+  background: var(--barra);
+}
+.teclas button, .barra button {
+  min-height: 40px; padding: 0 12px; border: 0; border-radius: 10px;
+  background: rgba(255, 255, 255, 0.1); color: #fff; font-size: 15px; font-weight: 600;
+}
+.teclas button.armada { background: var(--botao); }
+.teclas button:active, .barra button:active { background: rgba(255, 255, 255, 0.25); }
+
+.barra {
+  display: flex; gap: 6px; justify-content: space-between;
+  padding: 8px calc(env(safe-area-inset-right) + 8px) calc(env(safe-area-inset-bottom) + 8px) calc(env(safe-area-inset-left) + 8px);
+  background: var(--barra);
+}
+.barra button { flex: 1; min-width: 0; padding: 0 6px; }
+.barra button.ativo { background: var(--botao); }

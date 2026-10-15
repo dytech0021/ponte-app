@@ -1,0 +1,82 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <!-- A rede, para acessar os computadores, o pedido de instalação, para o aplicativo se atualizar, e a câmera, só
+         para ler o QR Code de uma transmissão. O aplicativo não é acessado e não lê arquivos do aparelho. -->
+    <uses-permission android:name="android.permission.INTERNET" />
+    <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
+    <uses-permission android:name="android.permission.CAMERA" />
+    <!-- Sem câmera o aplicativo continua servindo: o link da transmissão pode ser colado no campo de endereço. -->
+    <uses-feature android:name="android.hardware.camera" android:required="false" />
+    <uses-feature android:name="android.hardware.camera.autofocus" android:required="false" />
+
+    <application
+        android:allowBackup="false"
+        android:icon="@mipmap/ic_launcher"
+        android:label="@string/app_name"
+        android:supportsRtl="true"
+        android:theme="@style/Tema">
+
+        <activity
+            android:name=".MainActivity"
+            android:exported="true"
+            android:windowSoftInputMode="stateHidden|adjustResize">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+
+        <!-- Girar o aparelho ou abrir o teclado não pode recriar a tela, senão a sessão cairia. -->
+        <activity
+            android:name=".SessionActivity"
+            android:configChanges="orientation|screenSize|screenLayout|smallestScreenSize|keyboard|keyboardHidden|navigation|uiMode|density"
+            android:exported="false"
+            android:theme="@style/TemaSessao"
+            android:windowSoftInputMode="stateAlwaysHidden|adjustResize" />
+
+        <!-- Assistir a uma transmissão de tela: girar o aparelho não pode recarregar o vídeo. O link da transmissão
+             (lido pela câmera ou tocado numa conversa) abre aqui direto; o site confirma que o aplicativo é dele em
+             /.well-known/assetlinks.json. O botão da página no navegador usa ponte://assistir/código.
+             Ela vira janela flutuante (picture-in-picture) numa tarefa própria: com a transmissão na janelinha, o resto
+             do Ponte e os outros aplicativos continuam usáveis. -->
+        <activity
+            android:name=".AssistirActivity"
+            android:autoRemoveFromRecents="true"
+            android:configChanges="orientation|screenSize|screenLayout|smallestScreenSize|keyboard|keyboardHidden|navigation|uiMode|density"
+            android:exported="true"
+            android:launchMode="singleTask"
+            android:resizeableActivity="true"
+            android:supportsPictureInPicture="true"
+            android:taskAffinity="${applicationId}.assistir"
+            android:theme="@style/TemaSessao">
+            <intent-filter android:autoVerify="true">
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data android:scheme="https" android:host="${webHost}" android:pathPrefix="/ponte/assistir" />
+            </intent-filter>
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data android:scheme="ponte" android:host="assistir" />
+            </intent-filter>
+        </activity>
+
+        <!-- Leitor do QR Code da transmissão. Girar o aparelho só acerta a imagem da câmera, sem fechá-la e abrir de novo. -->
+        <activity
+            android:name=".LerQrActivity"
+            android:configChanges="orientation|screenSize|screenLayout|smallestScreenSize|keyboard|keyboardHidden|navigation|uiMode|density"
+            android:exported="false"
+            android:theme="@style/TemaSessao" />
+
+        <!-- Entrega ao instalador do Android o APK da atualização baixada, e só ele. -->
+        <provider
+            android:name=".UpdateProvider"
+            android:authorities="${applicationId}.updates"
+            android:exported="false"
+            android:grantUriPermissions="true" />
+    </application>
+
+</manifest>

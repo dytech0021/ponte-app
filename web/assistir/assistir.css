@@ -1,0 +1,49 @@
+/* Ponte · assistir a uma transmissão: o vídeo ocupa a tela toda, com uma barra discreta embaixo. */
+* { box-sizing: border-box; }
+
+html, body {
+  margin: 0; height: 100%; background: #000; color: #fff;
+  font: 15px/1.4 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  -webkit-tap-highlight-color: transparent;
+}
+
+#palco { position: fixed; inset: 0; display: flex; align-items: center; justify-content: center; }
+video { width: 100%; height: 100%; object-fit: contain; background: #000; }
+
+.aviso {
+  position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%);
+  max-width: min(440px, 90vw); padding: 14px 18px; border-radius: 14px;
+  background: rgba(20, 24, 28, 0.85); text-align: center; pointer-events: none;
+}
+.aviso p { margin: 0; white-space: pre-line; }
+.aviso[hidden] { display: none; }
+
+.barra {
+  position: absolute; left: 0; right: 0; bottom: 0;
+  display: flex; align-items: center; justify-content: space-between; gap: 8px;
+  padding: 10px calc(env(safe-area-inset-right) + 12px) calc(env(safe-area-inset-bottom) + 10px) calc(env(safe-area-inset-left) + 12px);
+  background: linear-gradient(to top, rgba(0, 0, 0, 0.75), rgba(0, 0, 0, 0));
+  transition: opacity 0.3s;
+}
+.barra.escondida { opacity: 0; pointer-events: none; }
+.marca { display: flex; align-items: center; gap: 8px; min-width: 0; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.ponto { flex: none; width: 10px; height: 10px; border-radius: 50%; background: #8a949a; }
+.ponto.vivo { background: #e03e3e; box-shadow: 0 0 0 3px rgba(224, 62, 62, 0.35); }
+.botoes { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 8px; min-width: 0; }
+/* Celular em pé: o nome numa linha e os botões embaixo, quebrando linha se precisar. */
+@media (max-width: 560px) {
+  .barra { flex-direction: column; align-items: stretch; }
+  .botoes { justify-content: flex-start; }
+}
+button, .botao {
+  display: inline-flex; align-items: center; min-height: 40px; padding: 0 14px; border: 0; border-radius: 10px;
+  background: rgba(255, 255, 255, 0.16); color: #fff; font: inherit; font-weight: 600; cursor: pointer; text-decoration: none;
+}
+button:active, .botao:active { background: rgba(255, 255, 255, 0.3); }
+.botao { background: #006978; }
+button[hidden], .botao[hidden] { display: none; }
+button.ligado { background: #006978; }
+
+/* Janela flutuante do app: só o vídeo e, se for o caso, o aviso em letra menor. */
+.flutuante .barra { display: none; }
+.flutuante .aviso { max-width: 94vw; padding: 6px 10px; border-radius: 8px; font-size: 12px; }

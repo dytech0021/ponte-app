@@ -1,0 +1,60 @@
+# Servidor de mídia da transmissão de tela do Ponte (MediaMTX), no mesmo servidor do relay.
+#
+# O Ponte do computador envia o vídeo por RTSPS (porta 8322, cifrado com o certificado do site) e quem abre o
+# link assiste por WebRTC (porta 8189, UDP ou TCP), com HLS de reserva; as páginas e o WebRTC/HLS passam pelo
+# nginx em https://filabox3d.com.br/ponte/ao-vivo/ e /ponte/ao-vivo-hls/. Quem pode transmitir ou assistir é
+# decidido pelo relay (PONTE_AUTH_PORT), que conhece os computadores registrados e os códigos dos links.
+# Fica em /etc/mediamtx/mediamtx.yml; o que não está aqui vale o padrão do MediaMTX.
+
+logLevel: warn
+logDestinations: [stdout]
+readTimeout: 10s
+writeTimeout: 10s
+writeQueueSize: 512
+
+authMethod: http
+authHTTPAddress: http://127.0.0.1:7414/mediamtx/auth
+authHTTPExclude: []
+
+# Só para o relay contar quem está assistindo.
+api: true
+apiAddress: 127.0.0.1:9997
+metrics: false
+pprof: false
+playback: false
+
+# Entrada do computador: só RTSP cifrado, só por TCP.
+rtsp: true
+rtspTransports: [tcp]
+rtspEncryption: "strict"
+rtspAddress: 127.0.0.1:8554
+rtspsAddress: :8322
+rtspServerKey: /etc/mediamtx/privkey.pem
+rtspServerCert: /etc/mediamtx/fullchain.pem
+rtspAuthMethods: [basic]
+
+rtmp: false
+srt: false
+moq: false
+
+hls: true
+hlsAddress: 127.0.0.1:8888
+hlsAllowOrigins: ["https://filabox3d.com.br"]
+hlsTrustedProxies: ["127.0.0.1"]
+hlsVariant: lowLatency
+
+webrtc: true
+webrtcAddress: 127.0.0.1:8889
+webrtcAllowOrigins: ["https://filabox3d.com.br"]
+webrtcTrustedProxies: ["127.0.0.1"]
+webrtcLocalUDPAddress: :8189
+webrtcLocalTCPAddress: :8189
+webrtcIPsFromInterfaces: true
+webrtcIPsFromInterfacesList: [enX0]
+
+pathDefaults:
+  maxReaders: 20
+
+# Só os caminhos das transmissões do Ponte existem: ao/ e o código de 24 letras e números do link.
+paths:
+  "~^ao/[A-Za-z0-9]{24}$":

@@ -1,0 +1,41 @@
+# Servidor de retransmissão do Ponte como serviço do systemd.
+# Instalação: copiar para /etc/systemd/system/, criar /etc/ponte-relay.env (modo 600) com
+#   PONTE_KEY=<a mesma chave configurada no programa>
+# e rodar: systemctl daemon-reload && systemctl enable --now ponte-relay
+#
+# Roda com usuário descartável, sem acesso de escrita ao sistema e com teto de memória e CPU,
+# para um abuso do serviço não derrubar o que mais estiver no servidor.
+
+[Unit]
+Description=Ponte - servidor de retransmissao de acesso remoto
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=/opt/node-v24.19.0-linux-x64/bin/node --max-old-space-size=64 /opt/ponte-relay/relay.js 7412
+EnvironmentFile=/etc/ponte-relay.env
+DynamicUser=yes
+Restart=always
+RestartSec=3
+
+MemoryMax=160M
+CPUQuota=40%
+LimitNOFILE=4096
+
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictAddressFamilies=AF_INET AF_INET6
+RestrictNamespaces=yes
+LockPersonality=yes
+CapabilityBoundingSet=
+SystemCallArchitectures=native
+
+[Install]
+WantedBy=multi-user.target

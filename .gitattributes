@@ -1,0 +1,5 @@
+# Arquivos que vão para o servidor Linux: quebra de linha do Linux, mesmo num checkout no Windows.
+*.sh text eol=lf
+relay/*.service text eol=lf
+relay/*.yml text eol=lf
+relay/*.js text eol=lf

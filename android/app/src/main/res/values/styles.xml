@@ -1,0 +1,46 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <style name="Tema" parent="android:Theme.Material.Light.NoActionBar">
+        <item name="android:colorAccent">@color/destaque</item>
+        <item name="android:colorPrimary">@color/destaque</item>
+        <item name="android:windowBackground">@color/fundo</item>
+        <item name="android:statusBarColor">@color/fundo</item>
+        <item name="android:navigationBarColor">@color/fundo</item>
+        <item name="android:windowLightStatusBar">true</item>
+        <item name="android:textColorPrimary">@color/texto</item>
+        <item name="android:textColorSecondary">@color/texto_secundario</item>
+    </style>
+
+    <!-- A tela da sessão é escura e ocupa o aparelho inteiro. -->
+    <style name="TemaSessao" parent="android:Theme.Material.NoActionBar">
+        <item name="android:colorAccent">@color/destaque_claro</item>
+        <item name="android:windowBackground">@color/sessao_fundo</item>
+        <item name="android:statusBarColor">@color/sessao_fundo</item>
+        <item name="android:navigationBarColor">@color/sessao_fundo</item>
+    </style>
+
+    <style name="BotaoPrincipal">
+        <item name="android:background">@drawable/botao_principal</item>
+        <item name="android:textColor">@color/texto_botao</item>
+        <item name="android:textSize">16sp</item>
+        <item name="android:textAllCaps">false</item>
+        <item name="android:minHeight">48dp</item>
+        <item name="android:stateListAnimator">@null</item>
+    </style>
+
+    <style name="BotaoSecundario">
+        <item name="android:background">@drawable/botao_secundario</item>
+        <item name="android:textColor">@color/destaque</item>
+        <item name="android:textSize">16sp</item>
+        <item name="android:textAllCaps">false</item>
+        <item name="android:minHeight">48dp</item>
+        <item name="android:stateListAnimator">@null</item>
+    </style>
+
+    <style name="TituloDeSecao">
+        <item name="android:textColor">@color/texto_secundario</item>
+        <item name="android:textSize">13sp</item>
+        <item name="android:textStyle">bold</item>
+        <item name="android:letterSpacing">0.04</item>
+    </style>
+</resources>

@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <item name="configuracoes" type="id" />
+    <item name="tema" type="id" />
+    <item name="mensagem" type="id" />
+    <item name="acao" type="id" />
+    <item name="transmissao" type="id" />
+</resources>
