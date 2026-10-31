@@ -372,6 +372,9 @@ internal static partial class SelfTest
         await session.DisposeAsync();
         check("sessão termina no computador controlado", await WaitAsync(() => host.Current is null));
 
+        // 7b. Desconexão por falta de uso
+        await CheckIdleAsync(host, hostConfig, () => Connect(password), shownScreen, check);
+
         // 8. Computador autorizado: entra sem senha e sem aceite, e só ele.
         check("entrar com a senha, sem estar salvo, não autoriza", hostConfig.TrustedSnapshot().Length == 0);
         host.AskPermission = _ => Task.FromResult(Permission.Refuse);
@@ -417,6 +420,76 @@ internal static partial class SelfTest
         host.AskPermission = _ => Task.FromResult(Permission.Refuse);
         var next = await Try(viewerConfig, null);
         check("\"sempre permitir\" no aceite autoriza as próximas conexões", always is { Entered: true, Paired: true } && next.Entered, always.Reason + next.Reason);
+    }
+
+    // Tempo sem uso. Aqui o minuto do controlado dura 1 s, e o uso é soltar a F24 (tecla que nenhum programa usa): o mouse fica parado.
+    private static async Task CheckIdleAsync(HostService host, AppConfig hostConfig, Func<Task<ViewerSession>> connect, int screen, Checker check)
+    {
+        const int F24 = 0x87;
+        bool endedIdle = false;
+        void Ended(HostSession ended) => endedIdle = ended.EndedIdle;
+        HostSession.SecondsPerMinute = 1;
+        host.SessionEnded += Ended;
+        try
+        {
+            async Task<(ViewerSession Session, Task<string> Closed, List<string> Notices)> OpenAsync(int hostMinutes, int? viewerSeconds)
+            {
+                await WaitAsync(() => host.Current is null);
+                hostConfig.HostIdleMinutes = hostMinutes;
+                endedIdle = false;
+                var opened = await connect();
+                var closed = new TaskCompletionSource<string>(TaskCreationOptions.RunContinuationsAsynchronously);
+                var notices = new List<string>();
+                opened.Closed += reason => closed.TrySetResult(reason);
+                opened.Notice += text => { lock (notices) notices.Add(text); };
+                opened.Start();
+                await opened.SendSettingsAsync(screen, 60, idleSeconds: viewerSeconds);
+                return (opened, closed.Task, notices);
+            }
+            static async Task<string?> ClosedWithin(Task<string> closed, int seconds) =>
+                await Task.WhenAny(closed, Task.Delay(seconds * 1000)) == closed ? closed.Result : null;
+
+            // O tempo de quem acessa vale primeiro: 3 s, com o computador em "nunca".
+            var (mine, mineClosed, notices) = await OpenAsync(0, 3);
+            for (int i = 0; i < 4; i++)
+            {
+                await Task.Delay(1000);
+                await mine.SendKeyAsync(F24, true, false);
+            }
+            await Task.Delay(500);
+            check("sessão continua enquanto quem acessa está mexendo", !mineClosed.IsCompleted);
+            var watch = Stopwatch.StartNew();
+            string? reason = await ClosedWithin(mineClosed, 8);
+            double since = watch.Elapsed.TotalSeconds + 0.5;
+            string told;
+            lock (notices) told = string.Join(" | ", notices);
+            check("sem uso, a sessão cai no tempo de quem acessa, mesmo com o computador em \"nunca\"",
+                reason?.Contains("falta de uso") == true && since is > 2 and < 5, $"{since:0.0} s depois do último uso: {reason ?? "não caiu"}");
+            check("aviso antes de a sessão cair por falta de uso", told.Contains("vai ser encerrada"), told);
+            await mine.DisposeAsync();
+            check("o computador controlado anota que encerrou por falta de uso", await WaitAsync(() => endedIdle));
+
+            // Sem tempo de quem acessa, vale o do computador: 2 minutos, que aqui são 2 s.
+            var (theirs, theirsClosed, _) = await OpenAsync(2, null);
+            watch.Restart();
+            reason = await ClosedWithin(theirsClosed, 8);
+            check("sem tempo escolhido por quem acessa, vale o do computador", reason?.Contains("falta de uso") == true && watch.Elapsed.TotalSeconds < 4.5,
+                $"{watch.Elapsed.TotalSeconds:0.0} s: {reason ?? "não caiu"}");
+            await theirs.DisposeAsync();
+
+            // "Nunca" de quem acessa também vale primeiro: com o computador em 2 s, a sessão continua.
+            var (never, neverClosed, _) = await OpenAsync(2, 0);
+            await Task.Delay(4000);
+            check("\"nunca\" de quem acessa mantém a sessão, mesmo com tempo no computador", !neverClosed.IsCompleted);
+            await never.DisposeAsync();
+            await WaitAsync(() => host.Current is null);
+        }
+        finally
+        {
+            host.SessionEnded -= Ended;
+            HostSession.SecondsPerMinute = 60;
+            hostConfig.HostIdleMinutes = 0;
+        }
     }
 
     // Observa, no nível do sistema, o que o controlado injetou ao receber um texto, e retém essas teclas:

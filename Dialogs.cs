@@ -292,7 +292,7 @@ internal sealed class SettingsDialog : Form
     /// <param name="manageAutostart">Falso na cópia de desenvolvimento e nos perfis de teste, que não entram na inicialização do Windows.</param>
     public SettingsDialog(AppConfig config, bool manageAutostart)
     {
-        Ui.Prepare(this, "Configurações - Ponte", 440, 416);
+        Ui.Prepare(this, "Configurações - Ponte", 440, 538);
         Ui.Text(this, "Servidor de retransmissão (necessário para conectar por ID pela internet)", 16, 14, 408);
         var relay = new TextBox { Text = config.RelayServer, PlaceholderText = "exemplo.com:7412", Location = new Point(16, 38), Size = new Size(408, 23) };
         Controls.Add(relay);
@@ -316,16 +316,38 @@ internal sealed class SettingsDialog : Form
         Controls.Add(update);
         Controls.Add(sound);
 
-        Ui.Text(this, "Aparência", 16, 305, 130);
-        var theme = new ComboBox { DropDownStyle = ComboBoxStyle.DropDownList, Location = new Point(150, 302), Size = new Size(274, 23) };
+        // Tempo sem uso: o de quem acessa este computador e o de quando este computador acessa outro.
+        Ui.Text(this, "Desconectar depois de um tempo sem uso:", 16, 300, 408);
+        var idleChoices = new List<int> { 0, 5, 10, 15, 30, 60, 120, 240, 480 };
+        foreach (int minutes in new[] { config.HostIdleMinutes, config.ViewerIdleMinutes ?? 0 })
+            if (minutes > 0 && !idleChoices.Contains(minutes)) idleChoices.Add(minutes);
+        idleChoices.Sort();
+        ComboBox IdleBox(string label, int y, bool viewer, int? current)
+        {
+            Ui.Text(this, label, 16, y + 3, 200);
+            var box = new ComboBox { DropDownStyle = ComboBoxStyle.DropDownList, Location = new Point(220, y), Size = new Size(204, 23) };
+            if (viewer) box.Items.Add("O tempo de lá");
+            foreach (int minutes in idleChoices) box.Items.Add(minutes == 0 ? "Nunca" : HostSession.Span(minutes * 60));
+            int index = current is { } value ? idleChoices.IndexOf(Math.Max(0, value)) : -1;
+            box.SelectedIndex = viewer ? index + 1 : Math.Max(0, index);
+            Controls.Add(box);
+            return box;
+        }
+        var hostIdle = IdleBox("Quem acessa este computador", 324, false, config.HostIdleMinutes);
+        var viewerIdle = IdleBox("Ao acessar outro computador", 354, true, config.ViewerIdleMinutes);
+        Ui.Text(this, "Sem uso é ninguém mexer no mouse, no teclado ou na tela. Se quem acessa escolheu um tempo no aparelho dele, vale o dele.",
+            16, 384, 408, 34).ForeColor = SystemColors.GrayText;
+
+        Ui.Text(this, "Aparência", 16, 431, 130);
+        var theme = new ComboBox { DropDownStyle = ComboBoxStyle.DropDownList, Location = new Point(150, 428), Size = new Size(274, 23) };
         string[] themes = { "auto", "claro", "escuro" };
         theme.Items.AddRange(new object[] { "Acompanhar o Windows", "Clara", "Escura (modo noturno)" });
         theme.SelectedIndex = Math.Max(0, Array.IndexOf(themes, config.Theme));
         Controls.Add(theme);
-        Ui.Text(this, "As mudanças valem na próxima vez que o Ponte for aberto.", 16, 338, 408).ForeColor = SystemColors.GrayText;
+        Ui.Text(this, "As mudanças valem na próxima vez que o Ponte for aberto.", 16, 462, 408).ForeColor = SystemColors.GrayText;
 
-        var save = Ui.Button(this, "Salvar", 236, 372, 90);
-        var cancel = Ui.Button(this, "Cancelar", 334, 372, 90, DialogResult.Cancel);
+        var save = Ui.Button(this, "Salvar", 236, 496, 90);
+        var cancel = Ui.Button(this, "Cancelar", 334, 496, 90, DialogResult.Cancel);
         AcceptButton = save;
         CancelButton = cancel;
         save.Click += (_, _) =>
@@ -341,6 +363,8 @@ internal sealed class SettingsDialog : Form
                 Autostart.Apply(config);
             }
             config.ShareSound = sound.Checked;
+            config.HostIdleMinutes = idleChoices[hostIdle.SelectedIndex];
+            config.ViewerIdleMinutes = viewerIdle.SelectedIndex == 0 ? null : idleChoices[viewerIdle.SelectedIndex - 1];
             config.Theme = themes[theme.SelectedIndex];
             config.Save();
             DialogResult = DialogResult.OK;

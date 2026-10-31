@@ -229,13 +229,22 @@ body.em-sessao { overflow: hidden; overscroll-behavior: none; }
   padding: 8px calc(env(safe-area-inset-right) + 8px) calc(env(safe-area-inset-bottom) + 8px) calc(env(safe-area-inset-left) + 8px);
   background: var(--barra);
 }
-.barra button { flex: 1; min-width: 0; padding: 0 6px; }
+/* Cada botão parte da largura do texto ("Touchpad" é o maior) e divide o que sobra. */
+.barra button { flex: 1 1 auto; min-width: 0; padding: 0 4px; }
 .barra button.ativo { background: var(--botao); }
+.barra button.seta { flex: 0 0 auto; padding: 0 11px; }
+@media (max-width: 360px) {
+  .barra { gap: 4px; }
+  .barra button { font-size: 13px; }
+  .barra button.seta { padding: 0 8px; }
+}
 
-/* Tela cheia: só a imagem; "Comandos", num canto e meio transparente, traz a barra de volta. */
-#sessao.tela-cheia .barra, #sessao.tela-cheia .teclas { display: none; }
+/* Tela cheia: só a imagem; "Comandos", num canto e meio transparente, traz a barra de volta. Recolhida pela
+   seta (como no Android), a barra some sem a tela cheia, e a seta do canto a traz de volta. */
+#sessao.tela-cheia .barra, #sessao.tela-cheia .teclas, #sessao.recolhida .barra, #sessao.recolhida .teclas { display: none; }
 .comandos {
   position: absolute; right: calc(env(safe-area-inset-right) + 10px); bottom: calc(env(safe-area-inset-bottom) + 10px);
   min-height: 36px; padding: 0 12px; border: 0; border-radius: 18px;
   background: rgba(0, 0, 0, 0.45); color: rgba(255, 255, 255, 0.85); font-size: 13px; font-weight: 600;
 }
+.comandos.seta { min-width: 44px; padding: 0; font-size: 14px; }

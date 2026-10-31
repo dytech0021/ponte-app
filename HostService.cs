@@ -35,6 +35,14 @@ internal sealed class HostSession(Channel channel, HelloMsg hello, string remote
     // Por que a sessão terminou: vale o primeiro motivo, o resto é consequência dele.
     private string? _end;
     private volatile bool _byeReceived, _stoppedHere;
+    // O uso de quem acessa: quando chegou a última entrada dele, o tempo sem uso que ele pediu (-1 enquanto não
+    // pediu) e quantos arquivos daqui estão indo para lá (enviando, a sessão não está parada).
+    private long _lastInput = Stopwatch.GetTimestamp();
+    private int _viewerIdle = -1, _sendingFiles;
+
+    /// <summary>Quantos segundos tem cada minuto de <see cref="AppConfig.HostIdleMinutes"/>; o autoteste encurta.</summary>
+    internal static int SecondsPerMinute = 60;
+    private const int MaxIdleSeconds = 7 * 24 * 3600;
 
     public string PeerName { get; } = hello.Name;
     public string PeerUser { get; } = hello.User;
@@ -61,6 +69,21 @@ internal sealed class HostSession(Channel channel, HelloMsg hello, string remote
     /// <summary>Por que a sessão terminou, para o registro de sessões.</summary>
     public string EndReason => _end ?? "motivo não identificado";
 
+    /// <summary>A sessão foi encerrada aqui porque quem acessava ficou o tempo combinado sem mexer.</summary>
+    public bool EndedIdle { get; private set; }
+
+    /// <summary>Segundos sem uso até a sessão ser encerrada (0 é nunca): o tempo de quem acessa, se ele mandou, ou o daqui.</summary>
+    public int IdleLimit
+    {
+        get
+        {
+            int wanted = Volatile.Read(ref _viewerIdle);
+            return wanted >= 0 ? wanted : Math.Min(Math.Max(0, config.HostIdleMinutes) * SecondsPerMinute, MaxIdleSeconds);
+        }
+    }
+
+    private void Touch() => Volatile.Write(ref _lastInput, Stopwatch.GetTimestamp());
+
     /// <summary>Como a imagem estava indo e quanto foi enviado, para o registro de sessões.</summary>
     public string Summary
     {
@@ -79,7 +102,16 @@ internal sealed class HostSession(Channel channel, HelloMsg hello, string remote
 
     public Task SendClipboardAsync(string text) => channel.SendAsync(Msg.Clipboard, Encoding.UTF8.GetBytes(text), _stop.Token);
 
-    public Task SendFileAsync(string path, IProgress<int>? progress) => FileSender.SendAsync(channel, path, progress, _stop.Token);
+    public async Task SendFileAsync(string path, IProgress<int>? progress)
+    {
+        Interlocked.Increment(ref _sendingFiles);
+        try { await FileSender.SendAsync(channel, path, progress, _stop.Token); }
+        finally
+        {
+            Interlocked.Decrement(ref _sendingFiles);
+            Touch();
+        }
+    }
 
     public async Task RunAsync(CancellationToken outer)
     {
@@ -97,6 +129,7 @@ internal sealed class HostSession(Channel channel, HelloMsg hello, string remote
         }, CancellationToken.None);
         var pointer = Task.Run(() => PointerLoopAsync(ct), CancellationToken.None);
         var sound = Task.Run(() => SoundLoopAsync(ct), CancellationToken.None);
+        var idle = Task.Run(() => IdleLoopAsync(ct), CancellationToken.None);
         try
         {
             await ReadLoopAsync(ct);
@@ -119,7 +152,7 @@ internal sealed class HostSession(Channel channel, HelloMsg hello, string remote
         {
             _stop.Cancel();
             SetSound(false);
-            foreach (var task in new[] { capture, sound, pointer })
+            foreach (var task in new[] { capture, sound, pointer, idle })
             {
                 try { await task; }
                 catch (Exception ex) when (ex is OperationCanceledException or IOException or ObjectDisposedException) { }
@@ -368,6 +401,47 @@ internal sealed class HostSession(Channel channel, HelloMsg hello, string remote
         }
     }
 
+    // Encerra a sessão depois do tempo sem uso, avisando antes: um minuto antes, ou na metade de um tempo mais curto.
+    private async Task IdleLoopAsync(CancellationToken ct)
+    {
+        using var tick = new PeriodicTimer(TimeSpan.FromMilliseconds(500));
+        bool warned = false;
+        while (await tick.WaitForNextTickAsync(ct))
+        {
+            if (Volatile.Read(ref _sendingFiles) > 0) Touch();
+            int limit = IdleLimit;
+            double idle = Stopwatch.GetElapsedTime(Volatile.Read(ref _lastInput)).TotalSeconds;
+            if (limit > 0 && idle >= limit)
+            {
+                if (Interlocked.CompareExchange(ref _end, $"encerrada por falta de uso ({Span(limit)} sem mexer)", null) is null) EndedIdle = true;
+                // O motivo vai na despedida: o visualizador 1.13.0 em diante o mostra; um anterior só vê a sessão terminar.
+                using var brief = CancellationTokenSource.CreateLinkedTokenSource(ct);
+                brief.CancelAfter(TimeSpan.FromSeconds(2));
+                await Quiet(channel.SendAsync(Msg.Bye, Encoding.UTF8.GetBytes(
+                    $"Sessão encerrada por falta de uso: {Span(limit)} sem mexer no mouse, no teclado ou na tela."), brief.Token));
+                _stop.Cancel();
+                return;
+            }
+            bool warning = limit > 0 && idle >= limit - Math.Min(60, limit / 2.0);
+            if (warning == warned) continue;
+            warned = warning;
+            await Quiet(channel.SendAsync(Msg.Notice, Encoding.UTF8.GetBytes(warning
+                ? $"A sessão vai ser encerrada em {Span(Math.Max(1, (int)Math.Round(limit - idle)))} por falta de uso. " +
+                  "Para continuar, mexa o mouse, use o teclado ou toque na tela."
+                : "Pronto: a sessão continua."), ct));
+        }
+    }
+
+    /// <summary>"40 segundos", "1 minuto", "10 minutos", "1 hora", "1 h 30 min".</summary>
+    internal static string Span(int seconds)
+    {
+        if (seconds < 60) return seconds == 1 ? "1 segundo" : $"{seconds} segundos";
+        int minutes = (int)Math.Round(seconds / 60.0);
+        if (minutes < 60) return minutes == 1 ? "1 minuto" : $"{minutes} minutos";
+        int hours = minutes / 60, rest = minutes % 60;
+        return rest > 0 ? $"{hours} h {rest} min" : hours == 1 ? "1 hora" : $"{hours} horas";
+    }
+
     public const string BlockedNotice =
         "O Windows bloqueou o mouse e o teclado: a janela ativa no outro computador é de um programa aberto como administrador. " +
         "Para controlá-la, abra o Ponte como administrador lá.";
@@ -391,15 +465,19 @@ internal sealed class HostSession(Channel channel, HelloMsg hello, string remote
             var p = m.Payload;
             switch (m.Type)
             {
+                // Uso é o que vem de quem acessa: mouse, teclado, toque e arquivos (mesmo bloqueados aqui, ele está mexendo).
                 case Msg.Mouse when p.Length >= 7:
+                    Touch();
                     InputInjector.Mouse(ScreenBounds(_screen), BitConverter.ToUInt16(p, 0), BitConverter.ToUInt16(p, 2), p[4], BitConverter.ToInt16(p, 5));
                     WarnIfBlocked(ct);
                     break;
                 case Msg.Key when p.Length >= 3:
+                    Touch();
                     InputInjector.Key(BitConverter.ToUInt16(p, 0), (p[2] & 1) != 0, (p[2] & 2) != 0);
                     WarnIfBlocked(ct);
                     break;
                 case Msg.Text when p.Length is > 0 and <= 4096:
+                    Touch();
                     InputInjector.Text(Encoding.UTF8.GetString(p));
                     WarnIfBlocked(ct);
                     break;
@@ -407,10 +485,13 @@ internal sealed class HostSession(Channel channel, HelloMsg hello, string remote
                     ClipboardReceived?.Invoke(Encoding.UTF8.GetString(p));
                     break;
                 case Msg.FileStart or Msg.FileChunk or Msg.FileEnd:
+                    Touch();
                     if (files.Handle(m.Type, p) is { } path) FileReceived?.Invoke(path);
                     break;
                 case Msg.Settings:
                     var s = Channel.FromJson<SettingsMsg>(p);
+                    // O tempo sem uso de quem acessa vale primeiro; sem ele (nulo, ou visualizador anterior à 1.13.0), vale o daqui.
+                    Volatile.Write(ref _viewerIdle, s.IdleSeconds is { } wanted ? Math.Clamp(wanted, 0, MaxIdleSeconds) : -1);
                     // Só o som mudando não é motivo para mandar a tela inteira de novo.
                     if (s.Screen != _screen || s.Quality != _quality) _forceFull = 1;
                     lock (_videoGate)

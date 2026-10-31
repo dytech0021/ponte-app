@@ -266,7 +266,7 @@ class SessionActivity : Activity() {
         if (store.fullScreen) setFullScreen(true, announce = false)
         status.text = "Conectado a ${connected.hostName}. Aguardando a imagem..."
         soundOn = connected.hasSound && store.sound
-        if (soundOn) connected.sendSettings(screenIndex, quality, true)
+        sendSettings(connected)
         when {
             connected.paired && !wasPaired -> showNotice("Este aparelho ficou autorizado lá: as próximas conexões entram direto, sem aprovação.")
             !connected.paired && wanted -> showNotice("Ainda sem autorização para entrar direto. Lá, marque \"Sempre permitir este computador\" no pedido, ou entre uma vez com a senha.")
@@ -318,11 +318,16 @@ class SessionActivity : Activity() {
         }
     }
 
+    /** Manda ao computador o monitor, a qualidade, o som e o tempo sem uso desta sessão. */
+    private fun sendSettings(target: Session? = session) {
+        target?.sendSettings(screenIndex, quality, soundOn, store.idleMinutes?.let { it * 60 })
+    }
+
     private fun toggleSound() {
         val current = session ?: return
         soundOn = !soundOn
         store.sound = soundOn
-        current.sendSettings(screenIndex, quality, soundOn)
+        sendSettings(current)
         if (!soundOn) player.silence()
         showNotice(if (soundOn) "Som ligado: você ouve o que o computador está tocando." else "Som desligado.")
     }
@@ -499,7 +504,7 @@ class SessionActivity : Activity() {
             .setTitle("Qualidade da imagem")
             .setSingleChoiceItems(options.map { it.first }.toTypedArray(), options.indexOfFirst { it.second == quality }) { dialog, which ->
                 quality = options[which].second
-                session?.sendSettings(screenIndex, quality, soundOn)
+                sendSettings()
                 dialog.dismiss()
             }
             .show()
@@ -512,7 +517,7 @@ class SessionActivity : Activity() {
             .setTitle("Monitor")
             .setSingleChoiceItems(labels.toTypedArray(), screens.indexOfFirst { it.index == screenIndex }) { dialog, which ->
                 screenIndex = screens[which].index
-                session?.sendSettings(screenIndex, quality, soundOn)
+                sendSettings()
                 dialog.dismiss()
             }
             .show()

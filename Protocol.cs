@@ -47,8 +47,11 @@ internal sealed record AuthResponseMsg(string? Proof, string? Signature = null, 
 internal sealed record ScreenInfo(int Index, int Width, int Height, bool Primary);
 /// <summary>Paired diz ao visualizador que ele está na lista de autorizados do outro computador; Version é a versão do Ponte de lá.</summary>
 internal sealed record AuthResultMsg(bool Ok, string Reason, string HostName, ScreenInfo[] Screens, bool Paired = false, string Version = "", int Caps = 0);
-/// <summary>Audio pede (ou dispensa) o som do computador controlado.</summary>
-internal sealed record SettingsMsg(int Screen, int Quality, bool Audio = false, VideoOptions? Video = null);
+/// <summary>
+/// Audio pede (ou dispensa) o som do computador controlado. IdleSeconds (1.13.0) é o tempo sem uso (sem mouse, teclado
+/// ou toque) depois do qual quem acessa quer a sessão encerrada: 0 é nunca, e nulo deixa valer o do computador controlado.
+/// </summary>
+internal sealed record SettingsMsg(int Screen, int Quality, bool Audio = false, VideoOptions? Video = null, int? IdleSeconds = null);
 internal sealed record FileStartMsg(string Name, long Size);
 
 /// <summary>

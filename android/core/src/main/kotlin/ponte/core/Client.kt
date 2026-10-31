@@ -281,7 +281,12 @@ class Session internal constructor(
                     Msg.AUDIO -> AudioCodec.decode(message.payload)?.let { listener.onSound(it) }
                     Msg.CLIPBOARD -> if (message.payload.size <= 256 * 1024) listener.onClipboard(String(message.payload, Charsets.UTF_8))
                     Msg.NOTICE -> if (message.payload.size <= 2048) listener.onNotice(String(message.payload, Charsets.UTF_8))
-                    Msg.BYE -> break
+                    Msg.BYE -> {
+                        // A partir da 1.13.0 o computador diz por que encerrou (por falta de uso, por exemplo).
+                        val told = String(message.payload, 0, minOf(message.payload.size, 2048), Charsets.UTF_8).filterNot { it.isISOControl() }.trim()
+                        if (told.isNotEmpty()) reason = told
+                        break
+                    }
                 }
             }
         } catch (e: Exception) {
@@ -319,9 +324,16 @@ class Session internal constructor(
         }
     }
 
-    /** @param sound pede o som do computador; um Ponte anterior à 1.5.0 ignora o pedido */
-    fun sendSettings(screen: Int, quality: Int, sound: Boolean = false) =
-        enqueue(Msg.SETTINGS, Json.write(mapOf("Screen" to screen, "Quality" to quality, "Audio" to sound)).toByteArray(Charsets.UTF_8))
+    /**
+     * @param sound pede o som do computador; um Ponte anterior à 1.5.0 ignora o pedido
+     * @param idleSeconds tempo sem uso até o computador encerrar a sessão (0 é nunca); nulo deixa valer o tempo
+     * configurado lá. Um Ponte anterior à 1.13.0 ignora.
+     */
+    fun sendSettings(screen: Int, quality: Int, sound: Boolean = false, idleSeconds: Int? = null) {
+        val settings = linkedMapOf<String, Any?>("Screen" to screen, "Quality" to quality, "Audio" to sound)
+        if (idleSeconds != null && idleSeconds >= 0) settings["IdleSeconds"] = idleSeconds
+        enqueue(Msg.SETTINGS, Json.write(settings).toByteArray(Charsets.UTF_8))
+    }
 
     fun sendClipboard(text: String) = enqueue(Msg.CLIPBOARD, text.toByteArray(Charsets.UTF_8))
 

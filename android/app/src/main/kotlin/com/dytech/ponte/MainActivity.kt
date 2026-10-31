@@ -523,17 +523,32 @@ class MainActivity : Activity() {
             }
             setSelection(store.themeMode.ordinal)
         }
+        // Tempo sem uso até o computador encerrar a sessão; null deixa valer o configurado no Ponte de lá.
+        val idleOptions = listOf(null to "O tempo do computador", 0 to "Nunca", 5 to "5 minutos", 10 to "10 minutos", 15 to "15 minutos",
+            30 to "30 minutos", 60 to "1 hora", 120 to "2 horas", 240 to "4 horas", 480 to "8 horas")
+        val idle = Spinner(this).apply {
+            id = R.id.inatividade
+            contentDescription = "Desconectar depois de um tempo sem uso"
+            minimumHeight = (48 * resources.displayMetrics.density).toInt()
+            adapter = ArrayAdapter(this@MainActivity, android.R.layout.simple_spinner_item, idleOptions.map { it.second }).apply {
+                setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item)
+            }
+            setSelection(idleOptions.indexOfFirst { it.first == store.idleMinutes }.coerceAtLeast(0))
+        }
         AlertDialog.Builder(this)
             .setTitle("Configurações")
             .setView(
                 form(
                     note("Aparência"), themeMode,
                     note("Nome com que este aparelho aparece no computador"), name,
+                    note("Desconectar depois de um tempo sem uso"), idle,
+                    note("Sem uso é não tocar na tela nem usar o teclado. O tempo escolhido aqui vale primeiro; em \"O tempo do computador\", vale o do Ponte de lá."),
                     note("Servidor de retransmissão, necessário para conectar por ID"), server,
                     note("Chave do servidor (a mesma do Ponte do computador)"), key,
                 )
             )
             .setPositiveButton("Salvar") { _, _ ->
+                store.idleMinutes = idleOptions[idle.selectedItemPosition].first
                 store.deviceName = name.text.toString()
                 store.relayServer = server.text.toString()
                 store.relayKey = key.text.toString()

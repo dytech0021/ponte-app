@@ -148,6 +148,13 @@ internal sealed class AppConfig
     public bool ShareSound { get; set; } = true;
     /// <summary>Ao acessar outro computador, tocar aqui o som de lá.</summary>
     public bool PlaySound { get; set; } = true;
+    /// <summary>
+    /// Minutos sem uso (sem mouse, teclado ou toque de quem acessa) até a sessão neste computador ser encerrada; 0 é nunca.
+    /// Quando quem acessa manda o tempo dele, vale o dele.
+    /// </summary>
+    public int HostIdleMinutes { get; set; }
+    /// <summary>Ao acessar outro computador, os minutos sem uso até desconectar (0 é nunca); nulo deixa valer o tempo de lá.</summary>
+    public int? ViewerIdleMinutes { get; set; }
     /// <summary>Preferências de transmissão ao acessar outro computador; o padrão mantém o modo compatível atual.</summary>
     /// <summary>Perfil de transmissão em uso ao acessar outro computador; a próxima conexão começa nele.</summary>
     public string Profile { get; set; } = StreamProfile.Default;

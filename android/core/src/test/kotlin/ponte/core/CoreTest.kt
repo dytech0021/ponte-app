@@ -1,8 +1,12 @@
 package ponte.core
 
+import java.io.ByteArrayInputStream
+import java.io.ByteArrayOutputStream
 import java.security.KeyPairGenerator
 import java.security.Signature
 import java.security.spec.ECGenParameterSpec
+import javax.net.ssl.SSLContext
+import javax.net.ssl.SSLSocket
 import kotlin.test.Test
 import kotlin.test.assertContentEquals
 import kotlin.test.assertEquals
@@ -193,5 +197,63 @@ class CoreTest {
         assertTrue(Session.versionAtLeast("2.0.1", 1, 3))
         assertFalse(Session.versionAtLeast("1.2.1", 1, 3))
         assertFalse(Session.versionAtLeast("", 1, 3))
+    }
+
+    // Uma sessão sobre um fluxo de mentira: chega o que está em [incoming] e o que ela manda fica em [sent].
+    private fun fakeSession(incoming: ByteArray, sent: ByteArrayOutputStream): Session {
+        val socket = SSLContext.getDefault().socketFactory.createSocket() as SSLSocket
+        return Session(socket, Channel(ByteArrayInputStream(incoming), sent), Target.parse("123456789"), "PC", emptyList(), false, "1.13.0", "ab")
+    }
+
+    private fun frame(type: Int, payload: ByteArray) =
+        byteArrayOf(type.toByte(), payload.size.toByte(), (payload.size shr 8).toByte(), (payload.size shr 16).toByte(), (payload.size shr 24).toByte()) + payload
+
+    @Test
+    fun tempoSemUsoVaiNasPreferenciasSoQuandoEscolhido() {
+        val sent = ByteArrayOutputStream()
+        val session = fakeSession(ByteArray(0), sent)
+        session.sendSettings(1, 60, true, 600)
+        session.sendSettings(0, 35, false, 0)
+        session.sendSettings(0, 35)
+        session.close()
+        // Os envios saem por uma fila própria; o fim dela é a despedida que o close() manda.
+        val messages = ArrayList<Pair<Int, String>>()
+        val deadline = System.currentTimeMillis() + 5000
+        while (System.currentTimeMillis() < deadline) {
+            messages.clear()
+            val channel = Channel(ByteArrayInputStream(sent.toByteArray()), ByteArrayOutputStream())
+            while (true) {
+                val message = channel.read() ?: break
+                messages.add(message.type to String(message.payload, Charsets.UTF_8))
+            }
+            if (messages.lastOrNull()?.first == Msg.BYE) break
+            Thread.sleep(20)
+        }
+        assertEquals(
+            listOf(
+                Msg.SETTINGS to """{"Screen":1,"Quality":60,"Audio":true,"IdleSeconds":600}""",
+                Msg.SETTINGS to """{"Screen":0,"Quality":35,"Audio":false,"IdleSeconds":0}""",
+                Msg.SETTINGS to """{"Screen":0,"Quality":35,"Audio":false}""",
+                Msg.BYE to "",
+            ),
+            messages,
+        )
+    }
+
+    @Test
+    fun motivoDoEncerramentoVemNaDespedida() {
+        val told = "Sessão encerrada por falta de uso: 10 minutos sem mexer no mouse, no teclado ou na tela."
+        val reasons = listOf(told.toByteArray(Charsets.UTF_8), ByteArray(0)).map { payload ->
+            var closedWith = "?"
+            fakeSession(frame(Msg.BYE, payload), ByteArrayOutputStream()).run(object : SessionListener {
+                override fun onFrame(frame: Frame) {}
+                override fun onClipboard(text: String) {}
+                override fun onNotice(text: String) {}
+                override fun onClosed(reason: String) { closedWith = reason }
+            })
+            closedWith
+        }
+        // Sem motivo (Ponte anterior à 1.13.0), fica o de sempre.
+        assertEquals(listOf(told, "O outro computador encerrou a sessão."), reasons)
     }
 }

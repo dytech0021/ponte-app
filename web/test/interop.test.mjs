@@ -125,6 +125,26 @@ test('o som do computador chega quando pedido', { skip }, async () => {
   await pause(500);
 });
 
+test('sem uso, o computador encerra no tempo do navegador, avisa antes e diz o motivo', { skip }, async () => {
+  const session = await connect(id, options(await newIdentity(), { password }));
+  const primary = session.screens.find((s) => s.Primary);
+  const notices = [];
+  let closedReason = null;
+  const started = Date.now();
+  const running = session.run({ onNotice: (text) => notices.push(text), onClosed: (reason) => { closedReason = reason; } });
+  // 2 s sem uso, pedidos por aqui: vale mesmo com o computador em "nunca" (o padrão).
+  session.sendSettings(primary.Index, 60, false, 2);
+  const timer = setTimeout(() => session.close(), 10000);
+  await running;
+  clearTimeout(timer);
+  const seconds = (Date.now() - started) / 1000;
+  console.log(`encerrada em ${seconds.toFixed(1)} s: ${closedReason}; avisos: ${notices.join(' | ')}`);
+  assert.match(closedReason ?? '', /falta de uso/);
+  assert.ok(seconds < 6, `demorou ${seconds.toFixed(1)} s`);
+  assert.ok(notices.some((text) => text.includes('vai ser encerrada')), 'o aviso antes do fim não chegou');
+  await pause(500);
+});
+
 test('identidade diferente da guardada é percebida', { skip }, async () => {
   const identity = await newIdentity();
   await assert.rejects(connect(id, options(identity, { password, known: '00'.repeat(32) })), (e) => e.message === 'Conexão cancelada.');

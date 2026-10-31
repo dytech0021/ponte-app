@@ -5,7 +5,7 @@
 import * as P from './ponte.js';
 import { Account, SITE } from './conta.js';
 
-const VERSION = '1.12.1';
+const VERSION = '1.13.0';
 const { MouseAction } = P;
 
 const $ = (id) => document.getElementById(id);
@@ -36,11 +36,16 @@ const RELAY_URL = (() => {
 
 // som: ouvir o computador na sessão. telaCheia: a sessão abre sem a barra de comandos (a última escolha).
 // tema: 'auto' (o do aparelho), 'claro' ou 'escuro'. conta: { email, userId, token (cifrado) } ou null.
-// contaRemover: chaves removidas aqui que ainda faltam apagar da conta.
+// contaRemover: chaves removidas aqui que ainda faltam apagar da conta. inatividade: minutos sem uso até o computador
+// encerrar a sessão (0 é nunca); null deixa valer o tempo configurado no Ponte de lá.
 const DEFAULTS = {
   nome: '', salvos: [], recentes: [], identidades: {}, qualidade: 60, touchpad: false, dicaInstalar: true,
-  som: true, telaCheia: false, tema: 'auto', conta: null, contaRemover: [],
+  som: true, telaCheia: false, tema: 'auto', conta: null, contaRemover: [], inatividade: null,
 };
+
+// As escolhas de tempo sem uso, em minutos; 'la' é o tempo do computador acessado.
+const IDLE_CHOICES = [['la', 'O tempo do computador'], ['0', 'Nunca'], ['5', '5 minutos'], ['10', '10 minutos'], ['15', '15 minutos'],
+  ['30', '30 minutos'], ['60', '1 hora'], ['120', '2 horas'], ['240', '4 horas'], ['480', '8 horas']];
 
 const state = (() => {
   let stored = null;
@@ -51,6 +56,7 @@ const state = (() => {
   if (!s.identidades || typeof s.identidades !== 'object') s.identidades = {};
   if (!Array.isArray(s.contaRemover)) s.contaRemover = [];
   if (!s.conta || typeof s.conta !== 'object') s.conta = null;
+  if (!IDLE_CHOICES.some(([value]) => value === String(s.inatividade))) s.inatividade = null;
   return s;
 })();
 
@@ -511,12 +517,16 @@ async function showMenu() {
       fields: [
         { id: 'nome', label: 'Nome com que este aparelho aparece no computador', value: deviceName(), capitalize: 'words' },
         { id: 'tema', label: 'Tema', value: state.tema, choices: [['auto', 'Automático (o do aparelho)'], ['claro', 'Claro'], ['escuro', 'Escuro']] },
+        { id: 'inatividade', label: 'Desconectar depois de um tempo sem uso', value: state.inatividade === null ? 'la' : String(state.inatividade), choices: IDLE_CHOICES },
       ],
+      note: 'Sem uso é não tocar na tela nem usar o teclado. O tempo escolhido aqui vale primeiro; em "O tempo do computador", ' +
+        'vale o que estiver configurado no Ponte de lá.',
       buttons: [{ label: 'Cancelar', value: null }, { label: 'Salvar', value: 'salvar', kind: 'forte', submit: true }],
     });
     if (ok === 'salvar') {
       state.nome = fields.nome.trim().slice(0, 60);
       state.tema = ['claro', 'escuro'].includes(fields.tema) ? fields.tema : 'auto';
+      state.inatividade = fields.inatividade === 'la' ? null : parseInt(fields.inatividade, 10) || 0;
       save();
       applyTheme();
     }
@@ -948,9 +958,9 @@ class Som {
 
 const sound = new Som();
 
-/** Manda ao computador o monitor, a qualidade e o som desta sessão. */
+/** Manda ao computador o monitor, a qualidade, o som e o tempo sem uso desta sessão. */
 function sendSettings(c, quality = state.qualidade) {
-  c.session.sendSettings(c.screen, quality, c.soundOn);
+  c.session.sendSettings(c.screen, quality, c.soundOn, state.inatividade === null ? null : state.inatividade * 60);
 }
 
 async function toggleSound(c) {
@@ -979,7 +989,15 @@ function setFullScreen(on, announce = true) {
   } else if (document.fullscreenElement) {
     document.exitFullscreen?.().catch(() => {});
   }
+  // A tela cheia tem o botão dela no canto; ao sair dela por "Comandos", a barra volta aberta, mesmo se estava recolhida.
+  setCollapsed(false);
   current?.tela.resize();
+}
+
+/** A seta da barra recolhe os comandos (e as teclas), como no Android; a do canto os traz de volta. */
+function setCollapsed(on) {
+  $('sessao').classList.toggle('recolhida', on);
+  $('b-abrir').hidden = !on;
 }
 
 // ---------- miniatura ----------
@@ -1021,6 +1039,7 @@ function openSessionScreen(status) {
   $('b-modo').textContent = state.touchpad ? 'Touchpad' : 'Toque';
   $('sessao').classList.toggle('tela-cheia', state.telaCheia);
   $('b-comandos').hidden = !state.telaCheia;
+  setCollapsed(false);
   setStatus(status);
   fitViewport();
   // Tela acesa durante a sessão (onde o navegador deixa; no app de iPhone, pelo próprio app).
@@ -2127,6 +2146,10 @@ function init() {
   $('b-mais').onclick = showMore;
   $('b-sair').onclick = leave;
   $('b-comandos').onclick = () => setFullScreen(false);
+  // As setas não tiram o foco do teclado do celular, se ele estiver aberto.
+  for (const id of ['b-recolher', 'b-abrir']) $(id).addEventListener('pointerdown', (event) => event.preventDefault());
+  $('b-recolher').onclick = () => setCollapsed(true);
+  $('b-abrir').onclick = () => setCollapsed(false);
   $('conta').onclick = accountClicked;
   $('exilados').onclick = openExilados;
   $('atualizar-agora').onclick = updateNow;

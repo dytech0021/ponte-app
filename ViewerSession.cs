@@ -183,7 +183,11 @@ internal sealed class ViewerSession : IAsyncDisposable
                         Notice?.Invoke(Encoding.UTF8.GetString(m.Payload));
                         break;
                     case Msg.Bye:
-                        detail = "o outro computador encerrou";
+                        // A 1.13.0 em diante diz o motivo quando foi ela que encerrou (por falta de uso, por exemplo).
+                        string told = new(Encoding.UTF8.GetString(m.Payload.AsSpan(0, Math.Min(m.Payload.Length, 2048)))
+                            .Where(c => !char.IsControl(c)).ToArray());
+                        if (told.Length > 0) reason = told;
+                        detail = "o outro computador encerrou" + (told.Length > 0 ? $": {told}" : "");
                         return;
                 }
             }
@@ -331,8 +335,9 @@ internal sealed class ViewerSession : IAsyncDisposable
     public Task SendTextAsync(string text) => Quiet(_channel.SendAsync(Msg.Text, Encoding.UTF8.GetBytes(text), _stop.Token));
 
     /// <param name="sound">Pede o som de lá. Um controlado anterior à 1.4.0 ignora o pedido.</param>
-    public Task SendSettingsAsync(int screen, int quality, bool sound = false, VideoOptions? video = null) =>
-        Quiet(_channel.SendJsonAsync(Msg.Settings, new SettingsMsg(screen, quality, sound, HostHasVideo ? video?.Normalize() : null), _stop.Token));
+    /// <param name="idleSeconds">Tempo sem uso até lá encerrar a sessão (0 é nunca; nulo deixa valer o de lá). Um controlado anterior à 1.13.0 ignora.</param>
+    public Task SendSettingsAsync(int screen, int quality, bool sound = false, VideoOptions? video = null, int? idleSeconds = null) =>
+        Quiet(_channel.SendJsonAsync(Msg.Settings, new SettingsMsg(screen, quality, sound, HostHasVideo ? video?.Normalize() : null, idleSeconds), _stop.Token));
 
     /// <summary>Grava uma redução da tela remota, para reconhecer o computador na lista. Falso se ainda não há imagem.</summary>
     public bool SaveThumbnail(string path)

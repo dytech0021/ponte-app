@@ -75,6 +75,11 @@ class Store(context: Context) {
         get() = prefs.getBoolean("som", true)
         set(value) = prefs.edit().putBoolean("som", value).apply()
 
+    /** Minutos sem uso até o computador encerrar a sessão (0 é nunca); null deixa valer o tempo configurado no Ponte de lá. */
+    var idleMinutes: Int?
+        get() = prefs.getInt("inatividade", -1).takeIf { it >= 0 }
+        set(value) = prefs.edit().putInt("inatividade", value ?: -1).apply()
+
     var themeMode: ThemeMode
         get() = ThemeMode.values().firstOrNull { it.value == prefs.getString("tema", null) } ?: ThemeMode.SYSTEM
         set(value) = prefs.edit().putString("tema", value.value).apply()

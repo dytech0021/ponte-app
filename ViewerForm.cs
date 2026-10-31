@@ -416,7 +416,8 @@ internal sealed class ViewerForm : Form
         catch (InvalidOperationException) { }
     }
 
-    private void Apply()
+    /// <summary>Manda de novo as preferências desta sessão; chamado também quando as Configurações mudam.</summary>
+    public void Apply()
     {
         if (!_started || _closing) return;
         var video = _videoOptions;
@@ -426,7 +427,7 @@ internal sealed class ViewerForm : Form
             video = video with { Codec = "jpeg" };
             PrepareVideoRuntime();
         }
-        _ = _session.SendSettingsAsync(_screen, _quality, _playing, _session.HostHasVideo ? video : null);
+        _ = _session.SendSettingsAsync(_screen, _quality, _playing, _session.HostHasVideo ? video : null, _config?.ViewerIdleMinutes * 60);
     }
 
     private void PrepareVideoRuntime()

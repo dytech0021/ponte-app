@@ -134,7 +134,10 @@ internal sealed class MainForm : Form
         settings.Click += (_, _) =>
         {
             using var dialog = new SettingsDialog(_config, Autostart.Managed(_args));
-            if (dialog.ShowDialog(this) == DialogResult.OK) _status.Text = "Configurações salvas. Feche e abra o Ponte para aplicar.";
+            if (dialog.ShowDialog(this) != DialogResult.OK) return;
+            _status.Text = "Configurações salvas. Feche e abra o Ponte para aplicar.";
+            // O tempo sem uso vale na hora, também nas sessões abertas daqui.
+            foreach (var viewer in _viewers) viewer.Apply();
         };
 
         Controls.Add(local);
@@ -406,7 +409,8 @@ internal sealed class MainForm : Form
     {
         _indicator?.Finish();
         _indicator = null;
-        _status.Text = $"Sessão de {session.PeerName} encerrada às {DateTime.Now:HH:mm} (começou às {session.Started:HH:mm}, entrou por {session.Access}).";
+        _status.Text = $"Sessão de {session.PeerName} encerrada{(session.EndedIdle ? " por falta de uso" : "")} às {DateTime.Now:HH:mm} " +
+                       $"(começou às {session.Started:HH:mm}, entrou por {session.Access}).";
         _ = ApplyUpdateAsync(force: false);
     }
 

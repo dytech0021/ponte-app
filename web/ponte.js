@@ -443,7 +443,12 @@ export class Session {
           if (sound) listener.onSound?.(sound);
         } else if (type === Msg.CLIPBOARD && payload.length <= 256 * 1024) listener.onClipboard?.(decoder.decode(payload));
         else if (type === Msg.NOTICE && payload.length <= 2048) listener.onNotice?.(decoder.decode(payload));
-        else if (type === Msg.BYE) break;
+        else if (type === Msg.BYE) {
+          // A partir da 1.13.0 o computador diz por que encerrou (por falta de uso, por exemplo).
+          const told = decoder.decode(payload.subarray(0, 2048)).replace(/[\u0000-\u001f\u007f]/g, '').trim();
+          if (told) reason = told;
+          break;
+        }
       }
     } catch (error) {
       reason = error instanceof PonteError ? error.message : 'A conexão com o outro computador caiu.';
@@ -482,9 +487,14 @@ export class Session {
     }
   }
 
-  /** sound pede o som do computador; um Ponte anterior à 1.5.0 ignora o pedido. */
-  sendSettings(screen, quality, sound = false) {
-    this.channel.sendJson(Msg.SETTINGS, { Screen: screen, Quality: quality, Audio: !!sound });
+  /**
+   * sound pede o som do computador; um Ponte anterior à 1.5.0 ignora o pedido. idleSeconds: tempo sem uso até o
+   * computador encerrar a sessão (0 é nunca); sem ele vale o tempo configurado lá. Um Ponte anterior à 1.13.0 ignora.
+   */
+  sendSettings(screen, quality, sound = false, idleSeconds = null) {
+    const settings = { Screen: screen, Quality: quality, Audio: !!sound };
+    if (Number.isInteger(idleSeconds) && idleSeconds >= 0) settings.IdleSeconds = idleSeconds;
+    this.channel.sendJson(Msg.SETTINGS, settings);
   }
 
   sendClipboard(text) {

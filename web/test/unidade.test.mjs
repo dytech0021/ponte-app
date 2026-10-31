@@ -4,7 +4,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
   idFromSpki, formatId, parseTarget, passwordProof, pairingMessage, parseFrame, parsePointer, versionAtLeast,
-  toBase64, fromBase64, newIdentity, PonteError, decodeAudio,
+  toBase64, fromBase64, newIdentity, PonteError, decodeAudio, Session, Msg,
 } from '../ponte.js';
 
 const enc = new TextEncoder();
@@ -77,4 +77,42 @@ test('versão e base64', () => {
   assert.ok(!versionAtLeast('', 1, 3));
   const bytes = Uint8Array.from({ length: 70000 }, (_, i) => i & 0xff);
   assert.deepEqual(fromBase64(toBase64(bytes)), bytes);
+});
+
+// Um canal de mentira: entrega as mensagens da lista e guarda o que a sessão mandou.
+function fakeChannel(incoming) {
+  const sent = [];
+  return {
+    sent,
+    read: async () => incoming.shift() ?? new Promise(() => {}),
+    send(type, payload = new Uint8Array(0)) { sent.push({ type, payload }); return Promise.resolve(); },
+    sendJson(type, value) { return this.send(type, enc.encode(JSON.stringify(value))); },
+    ws: { close() {} },
+  };
+}
+
+test('tempo sem uso vai nas preferências só quando escolhido', () => {
+  const channel = fakeChannel([]);
+  const session = new Session(channel, parseTarget('123456789'), { Ok: true, HostName: 'PC', Screens: [], Version: '1.13.0' }, 'ab');
+  session.sendSettings(1, 60, true, 600);
+  session.sendSettings(0, 35, false, 0);
+  session.sendSettings(0, 35);
+  const sent = channel.sent.map((m) => [m.type, JSON.parse(Buffer.from(m.payload).toString())]);
+  assert.deepEqual(sent, [
+    [Msg.SETTINGS, { Screen: 1, Quality: 60, Audio: true, IdleSeconds: 600 }],
+    [Msg.SETTINGS, { Screen: 0, Quality: 35, Audio: false, IdleSeconds: 0 }],
+    [Msg.SETTINGS, { Screen: 0, Quality: 35, Audio: false }],
+  ]);
+});
+
+test('motivo do encerramento vem na despedida do computador', async () => {
+  const told = 'Sessão encerrada por falta de uso: 10 minutos sem mexer no mouse, no teclado ou na tela.';
+  const result = { Ok: true, HostName: 'PC', Screens: [], Version: '1.13.0' };
+  const reasons = [];
+  for (const payload of [enc.encode(told), new Uint8Array(0)]) {
+    const session = new Session(fakeChannel([{ type: Msg.BYE, payload }]), parseTarget('123456789'), result, 'ab');
+    await session.run({ onClosed: (reason) => reasons.push(reason) });
+  }
+  // Sem motivo (Ponte anterior à 1.13.0), fica o de sempre.
+  assert.deepEqual(reasons, [told, 'O outro computador encerrou a sessão.']);
 });

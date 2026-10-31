@@ -2,6 +2,7 @@
 <resources>
     <item name="configuracoes" type="id" />
     <item name="tema" type="id" />
+    <item name="inatividade" type="id" />
     <item name="mensagem" type="id" />
     <item name="acao" type="id" />
     <item name="transmissao" type="id" />
