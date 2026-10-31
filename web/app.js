@@ -5,7 +5,7 @@
 import * as P from './ponte.js';
 import { Account, SITE } from './conta.js';
 
-const VERSION = '1.12.0';
+const VERSION = '1.12.1';
 const { MouseAction } = P;
 
 const $ = (id) => document.getElementById(id);
@@ -81,10 +81,25 @@ function dropThumbnail(key) {
 function applyTheme() {
   if (state.tema === 'claro' || state.tema === 'escuro') document.documentElement.dataset.tema = state.tema;
   else delete document.documentElement.dataset.tema;
+  tellIosAppBackground();
 }
 
 const isIos = /iPhone|iPad|iPod/.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
-const standalone = navigator.standalone === true || matchMedia('(display-mode: standalone)').matches;
+// Dentro do aplicativo de iPhone (pasta ios/) a página fala com ele por este canal.
+const iosApp = window.webkit?.messageHandlers?.ponte;
+const standalone = navigator.standalone === true || matchMedia('(display-mode: standalone)').matches || !!iosApp;
+
+/** Conta ao app de iPhone quando a sessão abre e fecha (tela acesa) e quando entra em tela cheia (some a barra de estado). */
+function tellIosApp(message) {
+  try { iosApp?.postMessage(message); } catch { /* fora do app não há a quem contar */ }
+}
+
+/** No app de iPhone a faixa da barra de estado fica fora da página: ela pinta com o fundo da tela que está à vista. */
+function tellIosAppBackground() {
+  if (!iosApp) return;
+  const visible = $('sessao').hidden ? document.body : $('sessao');
+  tellIosApp({ fundo: getComputedStyle(visible).backgroundColor });
+}
 
 function defaultName() {
   const ua = navigator.userAgent;
@@ -956,6 +971,7 @@ function setFullScreen(on, announce = true) {
   save();
   $('sessao').classList.toggle('tela-cheia', on);
   $('b-comandos').hidden = !on;
+  tellIosApp({ telaCheia: on });
   if (on) {
     $('digitar').blur();
     if (!document.fullscreenElement) document.documentElement.requestFullscreen?.().catch(() => {});
@@ -1007,8 +1023,10 @@ function openSessionScreen(status) {
   $('b-comandos').hidden = !state.telaCheia;
   setStatus(status);
   fitViewport();
-  // Tela acesa durante a sessão (onde o navegador deixa).
+  // Tela acesa durante a sessão (onde o navegador deixa; no app de iPhone, pelo próprio app).
   navigator.wakeLock?.request('screen').then((lock) => { wakeLock = lock; }).catch(() => {});
+  tellIosApp({ sessao: true, telaCheia: state.telaCheia });
+  tellIosAppBackground();
 }
 
 function closeSessionScreen() {
@@ -1019,6 +1037,8 @@ function closeSessionScreen() {
   if (document.fullscreenElement) document.exitFullscreen?.().catch(() => {});
   wakeLock?.release().catch(() => {});
   wakeLock = null;
+  tellIosApp({ sessao: false, telaCheia: false });
+  tellIosAppBackground();
   renderHome();
   checkPresence();
 }
@@ -2137,6 +2157,8 @@ function init() {
   if (shared) address.value = shared.shown;
 
   applyTheme();
+  // No tema automático, o fundo muda com o do aparelho sem passar por applyTheme.
+  matchMedia('(prefers-color-scheme: dark)').addEventListener?.('change', tellIosAppBackground);
   renderHome();
   showVersion();
   showAccount();

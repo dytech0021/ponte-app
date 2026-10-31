@@ -3,6 +3,12 @@ bin/
 obj/
 pronto/
 
+# Gerados no Mac do GitHub (XcodeGen e a compilação do app de iPhone)
+ios/Ponte.xcodeproj/
+ios/Ponte/Info.plist
+ios/build/
+ios/saida/
+
 # Capturas de tela dos modos de verificação (a da sessão mostra a área de trabalho de quem rodou)
 capturas/
 

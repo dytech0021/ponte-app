@@ -1,0 +1,49 @@
+{
+    "name":  "Ponte",
+    "identifier":  "com.dytech.ponte.fonte",
+    "subtitle":  "Acesso remoto ao seu computador",
+    "description":  "Acesse o seu computador pelo iPhone: tela, mouse, teclado, som e a lista de computadores da sua conta do FilaBox. É a página do Ponte num app, com login do Google, tela acesa e tela cheia.",
+    "iconURL":  "https://filabox3d.com.br/ponte/icone-512.png",
+    "website":  "https://filabox3d.com.br/ponte/",
+    "tintColor":  "#006978",
+    "nsfw":  false,
+    "apps":  [
+                 {
+                     "name":  "Ponte",
+                     "bundleIdentifier":  "com.dytech.ponte",
+                     "developerName":  "dytech0021",
+                     "subtitle":  "Acesso remoto ao seu computador",
+                     "localizedDescription":  "Acesse o seu computador pelo iPhone: tela, mouse, teclado, som e a lista de computadores da sua conta do FilaBox. É a página do Ponte num app, com login do Google, tela acesa e tela cheia.",
+                     "iconURL":  "https://filabox3d.com.br/ponte/icone-512.png",
+                     "tintColor":  "#006978",
+                     "category":  "utilities",
+                     "versions":  [
+                                      {
+                                          "version":  "1.12.1",
+                                          "buildVersion":  "1",
+                                          "date":  "2026-10-31",
+                                          "localizedDescription":  "Ponte para iPhone 1.12.1.",
+                                          "downloadURL":  "https://github.com/dytech0021/ponte-app/releases/download/ios-1.12.1/Ponte-1.12.1-iPhone.ipa",
+                                          "size":  59532,
+                                          "minOSVersion":  "16.0"
+                                      }
+                                  ],
+                     "version":  "1.12.1",
+                     "versionDate":  "2026-10-31",
+                     "versionDescription":  "Ponte para iPhone 1.12.1.",
+                     "downloadURL":  "https://github.com/dytech0021/ponte-app/releases/download/ios-1.12.1/Ponte-1.12.1-iPhone.ipa",
+                     "size":  59532,
+                     "appPermissions":  {
+                                            "entitlements":  [
+
+                                                             ],
+                                            "privacy":  {
+
+                                                        }
+                                        }
+                 }
+             ],
+    "news":  [
+
+             ]
+}

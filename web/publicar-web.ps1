@@ -18,7 +18,9 @@ if ($chaveSsh -like '*filabox3d_deploy_ed25519' -and (Test-Path $hostsDaChave)) 
 $pastaRemota = '/var/www/ponte-web'
 $endereco = 'https://filabox3d.com.br/ponte/'
 $arquivos = 'index.html', 'app.js', 'app.css', 'ponte.js', 'conta.js', 'manifest.webmanifest', 'icone-180.png', 'icone-192.png', 'icone-512.png',
-    'assetlinks.json'
+    'assetlinks.json', 'ios-retorno.html', 'ios-retorno.js'
+# A fonte do SideStore (ios\publicar-ios.ps1 a gera e envia); a pasta inteira é trocada aqui, então ela vai junto.
+if (Test-Path (Join-Path $raiz 'ios.json')) { $arquivos += 'ios.json' }
 $temp = Join-Path ([IO.Path]::GetTempPath()) ('ponte-web-' + [Guid]::NewGuid().ToString('N').Substring(0, 8))
 
 function Falhar($mensagem) {

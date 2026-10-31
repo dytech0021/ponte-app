@@ -10,7 +10,8 @@ $trabalho = Join-Path $env:LOCALAPPDATA 'Ponte\ponte-app'
 $autor = @('-c', 'user.name=dytech0021', '-c', 'user.email=288444726+dytech0021@users.noreply.github.com')
 # Fica de fora: a chave do APK e a senha dela. Os outros segredos nem entram no git (veja .gitignore), mas a conferência
 # abaixo recusa a publicação se algum deles aparecer, por nome de arquivo ou pelo conteúdo.
-$fora = @('chaves', 'android/keystore.properties')
+# Os workflows do GitHub (a compilação do iPhone) também ficam só no privado: rodam lá, e o login do gh não pode enviá-los.
+$fora = @('chaves', 'android/keystore.properties', '.github')
 $proibidos = @('*.jks', '*.keystore', '*.p12', '*.pfx', 'keystore.properties', 'relay.properties', 'RelayDefaults.cs', '*.chave', 'local.properties')
 
 function Falhar($mensagem) {

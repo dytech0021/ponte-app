@@ -1,0 +1,55 @@
+# O aplicativo de iPhone do Ponte. Não há Mac por aqui: o projeto do Xcode é gerado por este arquivo (XcodeGen) no
+# GitHub Actions (.github/workflows/ios.yml), que compila o IPA sem assinatura. Quem instala pelo SideStore (ou AltStore)
+# assina com o próprio Apple ID gratuito, e o SideStore renova a assinatura antes dos 7 dias.
+#
+# O app é uma moldura para a página https://filabox3d.com.br/ponte/ (pasta web/): as telas e o protocolo são os
+# mesmos do navegador, e o que muda na página chega ao app sem instalar nada. A parte nativa cuida do que a página
+# não faz sozinha dentro de um app: login com Google, tela acesa, tela cheia, som com o iPhone no silencioso e links.
+name: Ponte
+options:
+  bundleIdPrefix: com.dytech
+  deploymentTarget:
+    iOS: "16.0"
+  developmentLanguage: pt-BR
+settings:
+  base:
+    # A cada versão publicada (ios\publicar-ios.ps1): MARKETING_VERSION acompanha a página e CURRENT_PROJECT_VERSION sobe de um.
+    MARKETING_VERSION: "1.12.1"
+    CURRENT_PROJECT_VERSION: "1"
+    SWIFT_VERSION: "5.0"
+targets:
+  Ponte:
+    type: application
+    platform: iOS
+    sources:
+      - Ponte
+    scheme: {}
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.dytech.ponte
+        TARGETED_DEVICE_FAMILY: "1,2"
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+    info:
+      path: Ponte/Info.plist
+      properties:
+        CFBundleDisplayName: Ponte
+        CFBundleShortVersionString: $(MARKETING_VERSION)
+        CFBundleVersion: $(CURRENT_PROJECT_VERSION)
+        UILaunchScreen: {}
+        UIApplicationSceneManifest:
+          UIApplicationSupportsMultipleScenes: false
+        UISupportedInterfaceOrientations:
+          - UIInterfaceOrientationPortrait
+          - UIInterfaceOrientationLandscapeLeft
+          - UIInterfaceOrientationLandscapeRight
+        UISupportedInterfaceOrientations~ipad:
+          - UIInterfaceOrientationPortrait
+          - UIInterfaceOrientationPortraitUpsideDown
+          - UIInterfaceOrientationLandscapeLeft
+          - UIInterfaceOrientationLandscapeRight
+        # ponte://conta é a volta do login com Google (a página ios-retorno.html do site manda para cá).
+        CFBundleURLTypes:
+          - CFBundleURLName: com.dytech.ponte
+            CFBundleURLSchemes:
+              - ponte
+        ITSAppUsesNonExemptEncryption: false
