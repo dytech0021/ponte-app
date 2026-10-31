@@ -16,6 +16,7 @@ Type=simple
 ExecStart=/opt/node-v24.19.0-linux-x64/bin/node --max-old-space-size=64 /opt/ponte-relay/relay.js 7412
 EnvironmentFile=/etc/ponte-relay.env
 DynamicUser=yes
+StateDirectory=ponte-relay
 Restart=always
 RestartSec=3
 

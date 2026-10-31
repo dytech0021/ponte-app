@@ -382,7 +382,7 @@ export async function connect(targetText, options) {
     const { channel, certificateHash, fingerprint } = await SecureChannel.open(ws, queue, target.id, options.knownFingerprint, options.confirmNewIdentity);
     await channel.sendJson(Msg.HELLO, {
       Name: options.deviceName, User: options.userName, Version: options.version,
-      Key: toBase64(options.identity.spki), Caps: Caps.CURSOR,
+      Key: toBase64(options.identity.spki), Caps: Caps.CURSOR | Caps.AUDIO,
     });
     const challenge = await withTimeout(channel.expectJson(Msg.CHALLENGE), 20000, 'O outro computador não respondeu a tempo.');
     const nonce = fromBase64(challenge.Nonce || '');
@@ -423,9 +423,11 @@ export class Session {
     this.fingerprint = fingerprint;
     this.closedLocally = false;
     this.acceptsText = versionAtLeast(this.hostVersion, 1, 3);
+    /** O computador transmite o som dele quando pedido (1.5.0 em diante, e se o dono não desligou). */
+    this.hasSound = (this.hostCaps & Caps.AUDIO) !== 0;
   }
 
-  /** Lê até a sessão acabar. listener: onFrame, onPointer, onPointerPosition, onClipboard, onNotice, onClosed. */
+  /** Lê até a sessão acabar. listener: onFrame, onPointer, onPointerPosition, onSound, onClipboard, onNotice, onClosed. */
   async run(listener) {
     let reason = 'O outro computador encerrou a sessão.';
     try {
@@ -436,6 +438,9 @@ export class Session {
         else if (type === Msg.CURSOR_POS && payload.length >= 5) {
           const view = new DataView(payload.buffer, payload.byteOffset);
           listener.onPointerPosition?.(view.getUint16(1, true), view.getUint16(3, true), (payload[0] & 1) === 1);
+        } else if (type === Msg.AUDIO) {
+          const sound = decodeAudio(payload);
+          if (sound) listener.onSound?.(sound);
         } else if (type === Msg.CLIPBOARD && payload.length <= 256 * 1024) listener.onClipboard?.(decoder.decode(payload));
         else if (type === Msg.NOTICE && payload.length <= 2048) listener.onNotice?.(decoder.decode(payload));
         else if (type === Msg.BYE) break;
@@ -477,8 +482,9 @@ export class Session {
     }
   }
 
-  sendSettings(screen, quality) {
-    this.channel.sendJson(Msg.SETTINGS, { Screen: screen, Quality: quality, Audio: false });
+  /** sound pede o som do computador; um Ponte anterior à 1.5.0 ignora o pedido. */
+  sendSettings(screen, quality, sound = false) {
+    this.channel.sendJson(Msg.SETTINGS, { Screen: screen, Quality: quality, Audio: !!sound });
   }
 
   sendClipboard(text) {
@@ -518,6 +524,52 @@ export function parseFrame(p) {
     offset += length;
   }
   return { width, height, tiles };
+}
+
+const ADPCM_INDEX = [-1, -1, -1, -1, 2, 4, 6, 8];
+const ADPCM_STEPS = [
+  7, 8, 9, 10, 11, 12, 13, 14, 16, 17, 19, 21, 23, 25, 28, 31, 34, 37, 41, 45, 50, 55, 60, 66, 73, 80, 88, 97, 107, 118, 130,
+  143, 157, 173, 190, 209, 230, 253, 279, 307, 337, 371, 408, 449, 494, 544, 598, 658, 724, 796, 876, 963, 1060, 1166, 1282,
+  1411, 1552, 1707, 1878, 2066, 2272, 2499, 2749, 3024, 3327, 3660, 4026, 4428, 4871, 5358, 5894, 6484, 7132, 7845, 8630,
+  9493, 10442, 11487, 12635, 13899, 15289, 16818, 18500, 20350, 22385, 24623, 27086, 29794, 32767,
+];
+
+/**
+ * Som: formato (1 = PCM de 16 bits, 2 = ADPCM IMA de 4 bits), canais, amostras por segundo e os dados, como em
+ * Audio.cs. No ADPCM, antes dos dados vem o estado de cada canal (amostra prevista e índice do passo), e cada byte
+ * traz uma amostra de cada canal: a esquerda nos 4 bits baixos. Devolve { samples (Int16Array intercalado), rate,
+ * channels }, ou null se a mensagem não serve.
+ */
+export function decodeAudio(p) {
+  if (p.length < 6 || p.length > 1024 * 1024) return null;
+  const view = new DataView(p.buffer, p.byteOffset, p.byteLength);
+  const format = p[0], channels = p[1], rate = view.getInt32(2, true);
+  if (rate < 8000 || rate > 192000) return null;
+  if (format === 1 && (channels === 1 || channels === 2)) {
+    const samples = new Int16Array(Math.floor((p.length - 6) / (channels * 2)) * channels);
+    for (let i = 0; i < samples.length; i++) samples[i] = view.getInt16(6 + i * 2, true);
+    return { samples, rate, channels };
+  }
+  if (format === 2 && channels === 2 && p.length >= 14) {
+    const predicted = [view.getInt16(6, true), view.getInt16(10, true)];
+    const index = [Math.min(p[8], ADPCM_STEPS.length - 1), Math.min(p[12], ADPCM_STEPS.length - 1)];
+    const samples = new Int16Array((p.length - 14) * 2);
+    for (let i = 14; i < p.length; i++) {
+      for (let c = 0; c < 2; c++) {
+        const code = c === 0 ? p[i] & 15 : p[i] >> 4;
+        const step = ADPCM_STEPS[index[c]];
+        let change = step >> 3;
+        if (code & 4) change += step;
+        if (code & 2) change += step >> 1;
+        if (code & 1) change += step >> 2;
+        predicted[c] = Math.max(-32768, Math.min(32767, predicted[c] + (code & 8 ? -change : change)));
+        index[c] = Math.max(0, Math.min(ADPCM_STEPS.length - 1, index[c] + ADPCM_INDEX[code & 7]));
+        samples[(i - 14) * 2 + c] = predicted[c];
+      }
+    }
+    return { samples, rate, channels };
+  }
+  return null;
 }
 
 /** Ponteiro: 1 byte (bit 0 = visível), ponto ativo x e y (2 bytes cada) e a imagem em PNG. Null = ponteiro escondido. */

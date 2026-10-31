@@ -16,8 +16,6 @@ kotlin {
 }
 
 dependencies {
-    // Leitura do QR Code da transmissão pela câmera (veja QrReader).
-    implementation("com.google.zxing:core:3.5.3")
     testImplementation(kotlin("test"))
     testRuntimeOnly("org.junit.platform:junit-platform-launcher")
 }

@@ -153,8 +153,6 @@ internal sealed class AppConfig
     public string Profile { get; set; } = StreamProfile.Default;
     /// <summary>O que a pessoa mudou em cada perfil; um perfil que não está aqui vale o original.</summary>
     public Dictionary<string, StreamProfile> Profiles { get; set; } = new();
-    /// <summary>Como foi a última transmissão de tela (qualidade e som), para a próxima começar igual.</summary>
-    public BroadcastOptions Broadcast { get; set; } = new();
 
     public StreamProfile GetProfile(string key) =>
         Profiles.TryGetValue(key, out var profile) && profile is not null ? profile.Normalize() : StreamProfile.Original(key);
@@ -213,7 +211,6 @@ internal sealed class AppConfig
         }
         config ??= new AppConfig();
         config.Profiles ??= new();
-        config.Broadcast ??= new();
         config.AccountPendingDeletes ??= new();
         if (!StreamProfile.All.Any(p => p.Key == config.Profile)) config.Profile = StreamProfile.Default;
         config.Dir = dir;

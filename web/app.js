@@ -1,9 +1,11 @@
 // Ponte no navegador (feito para o iPhone, serve em qualquer aparelho): a tela inicial, com o ID, os
-// computadores salvos (e a bolinha de online) e os recentes, e a sessão, com a imagem, o toque e o teclado.
-// O protocolo e a criptografia de ponta a ponta ficam em ponte.js; aqui é só a parte que se vê.
+// computadores salvos (e a bolinha de online) e os recentes, e a sessão, com a imagem, o toque, o teclado e o som.
+// O protocolo e a criptografia de ponta a ponta ficam em ponte.js e a conta do FilaBox em conta.js; aqui é só a
+// parte que se vê.
 import * as P from './ponte.js';
+import { Account, SITE } from './conta.js';
 
-const VERSION = '1.8.6';
+const VERSION = '1.12.0';
 const { MouseAction } = P;
 
 const $ = (id) => document.getElementById(id);
@@ -32,7 +34,13 @@ const RELAY_URL = (() => {
 
 // ---------- o que fica guardado neste aparelho ----------
 
-const DEFAULTS = { nome: '', salvos: [], recentes: [], identidades: {}, qualidade: 60, touchpad: false, dicaInstalar: true };
+// som: ouvir o computador na sessão. telaCheia: a sessão abre sem a barra de comandos (a última escolha).
+// tema: 'auto' (o do aparelho), 'claro' ou 'escuro'. conta: { email, userId, token (cifrado) } ou null.
+// contaRemover: chaves removidas aqui que ainda faltam apagar da conta.
+const DEFAULTS = {
+  nome: '', salvos: [], recentes: [], identidades: {}, qualidade: 60, touchpad: false, dicaInstalar: true,
+  som: true, telaCheia: false, tema: 'auto', conta: null, contaRemover: [],
+};
 
 const state = (() => {
   let stored = null;
@@ -41,11 +49,38 @@ const state = (() => {
   if (!Array.isArray(s.salvos)) s.salvos = [];
   if (!Array.isArray(s.recentes)) s.recentes = [];
   if (!s.identidades || typeof s.identidades !== 'object') s.identidades = {};
+  if (!Array.isArray(s.contaRemover)) s.contaRemover = [];
+  if (!s.conta || typeof s.conta !== 'object') s.conta = null;
   return s;
 })();
 
 function save() {
   try { localStorage.setItem('ponte', JSON.stringify(state)); } catch { /* janela privada: vale só nesta visita */ }
+}
+
+// A última imagem vista de cada computador, pequena, para a lista: fica à parte para não pesar em cada save().
+const thumbnails = (() => {
+  try {
+    const stored = JSON.parse(localStorage.getItem('ponte-miniaturas') || '{}');
+    return stored && typeof stored === 'object' ? stored : {};
+  } catch {
+    return {};
+  }
+})();
+
+function saveThumbnails() {
+  try { localStorage.setItem('ponte-miniaturas', JSON.stringify(thumbnails)); } catch { /* sem espaço: fica o desenho */ }
+}
+
+function dropThumbnail(key) {
+  if (!(key in thumbnails)) return;
+  delete thumbnails[key];
+  saveThumbnails();
+}
+
+function applyTheme() {
+  if (state.tema === 'claro' || state.tema === 'escuro') document.documentElement.dataset.tema = state.tema;
+  else delete document.documentElement.dataset.tema;
 }
 
 const isIos = /iPhone|iPad|iPod/.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
@@ -73,8 +108,10 @@ function identity() {
   return identityPromise;
 }
 
-async function loadIdentity() {
-  try {
+/** As chaves deste aparelho no IndexedDB: { get, put }. Falha sem IndexedDB (janela privada). */
+let keysPromise = null;
+function keyStore() {
+  keysPromise ??= (async () => {
     const db = await new Promise((resolve, reject) => {
       const request = indexedDB.open('ponte', 1);
       request.onupgradeneeded = () => request.result.createObjectStore('chaves');
@@ -92,6 +129,14 @@ async function loadIdentity() {
       t.oncomplete = () => resolve();
       t.onerror = () => reject(t.error);
     });
+    return { get, put };
+  })();
+  return keysPromise;
+}
+
+async function loadIdentity() {
+  try {
+    const { get, put } = await keyStore();
     let pair = await get('identidade');
     if (!pair) {
       pair = await crypto.subtle.generateKey({ name: 'ECDSA', namedCurve: 'P-256' }, false, ['sign', 'verify']);
@@ -104,13 +149,46 @@ async function loadIdentity() {
   }
 }
 
+// O token de renovação da conta fica cifrado com uma chave AES que nem esta página consegue exportar (como o cofre
+// do Android): o que está no localStorage sozinho não serve para entrar na conta.
+async function vaultKey() {
+  const { get, put } = await keyStore();
+  let key = await get('conta');
+  if (!key) {
+    key = await crypto.subtle.generateKey({ name: 'AES-GCM', length: 256 }, false, ['encrypt', 'decrypt']);
+    await put('conta', key);
+  }
+  return key;
+}
+
+async function sealToken(text) {
+  const iv = crypto.getRandomValues(new Uint8Array(12));
+  const sealed = new Uint8Array(await crypto.subtle.encrypt({ name: 'AES-GCM', iv }, await vaultKey(), new TextEncoder().encode(text)));
+  const all = new Uint8Array(12 + sealed.length);
+  all.set(iv);
+  all.set(sealed, 12);
+  return P.toBase64(all);
+}
+
+async function openToken(sealed) {
+  try {
+    const data = P.fromBase64(sealed);
+    const plain = await crypto.subtle.decrypt({ name: 'AES-GCM', iv: data.subarray(0, 12) }, await vaultKey(), data.subarray(12));
+    return new TextDecoder().decode(plain);
+  } catch {
+    return null;
+  }
+}
+
 // ---------- janelas ----------
 
 let closeOpenDialog = null;
 
 /**
- * Mostra uma janela e espera a escolha. spec: { title, message, note, fields, options, buttons, validate }.
- * fields: { id, label, value, type, inputmode, disabled, checkbox, multiline }; options e buttons: { label, value, kind, checked }.
+ * Mostra uma janela e espera a escolha. spec: { title, message, note, links, fields, options, buttons, validate, busy }.
+ * fields: { id, label, value, type, inputmode, disabled, checkbox, multiline, choices: [[valor, texto]] };
+ * options e buttons: { label, value, kind, checked }; links: { label, href }. validate(fields, value) devolve o erro
+ * (texto) ou '' e pode ser assíncrono: enquanto isso a janela mostra busy e os botões ficam parados.
  * Devolve { value, fields }; value é null quando a janela foi fechada sem escolha.
  */
 function ask(spec) {
@@ -132,13 +210,14 @@ function ask(spec) {
         inputs[f.id] = input;
         continue;
       }
-      const input = el(f.multiline ? 'textarea' : 'input', 'campo');
-      if (!f.multiline) input.type = f.type || 'text';
+      const input = el(f.choices ? 'select' : f.multiline ? 'textarea' : 'input', 'campo');
+      if (f.choices) input.append(...f.choices.map(([value, text]) => Object.assign(el('option', '', text), { value })));
+      else if (!f.multiline) input.type = f.type || 'text';
       else input.rows = 4;
       input.id = `campo-${f.id}`;
       input.value = f.value ?? '';
       input.disabled = !!f.disabled;
-      input.autocomplete = f.type === 'password' ? 'current-password' : 'off';
+      input.autocomplete = f.type === 'password' ? 'current-password' : f.type === 'email' ? 'username' : 'off';
       input.setAttribute('autocorrect', 'off');
       input.setAttribute('autocapitalize', f.capitalize || 'off');
       if (f.inputmode) input.inputMode = f.inputmode;
@@ -148,6 +227,13 @@ function ask(spec) {
       label.style.cssText = 'display:block;margin-top:12px;font-size:14px';
       form.append(label, input);
       inputs[f.id] = input;
+    }
+    for (const l of spec.links || []) {
+      const a = el('a', 'link', l.label);
+      a.href = l.href;
+      a.target = '_blank';
+      a.rel = 'noopener';
+      form.append(a);
     }
     const error = el('p', 'erro');
     error.hidden = true;
@@ -181,12 +267,30 @@ function ask(spec) {
       for (const [key, input] of Object.entries(inputs)) out[key] = input.type === 'checkbox' ? input.checked : input.value;
       return out;
     }
-    function submit() {
+    let checking = false;
+    async function submit() {
       const chosen = (spec.buttons || []).find((b) => b.submit);
-      if (!chosen) return;
-      const problem = spec.validate?.(values()) || '';
+      if (!chosen || checking) return;
+      const buttons = [...form.querySelectorAll('button')];
+      checking = true;
+      if (spec.busy) {
+        error.textContent = spec.busy;
+        error.className = 'nota';
+        error.hidden = false;
+        buttons.forEach((b) => { b.disabled = true; });
+      }
+      let problem = '';
+      try {
+        problem = (await spec.validate?.(values(), chosen.value)) || '';
+      } catch (e) {
+        problem = e?.message || 'Não deu certo.';
+      }
+      checking = false;
+      buttons.forEach((b) => { b.disabled = false; });
+      if (done) return;
       if (problem) {
         error.textContent = problem;
+        error.className = 'erro';
         error.hidden = false;
         return;
       }
@@ -208,7 +312,7 @@ function ask(spec) {
       finish(null);
     };
     dialog.showModal();
-    const first = Object.values(inputs).find((i) => !i.disabled && i.type !== 'checkbox');
+    const first = Object.values(inputs).find((i) => !i.disabled && i.type !== 'checkbox' && i.tagName !== 'SELECT');
     if (first) first.focus();
   });
 }
@@ -238,7 +342,16 @@ function row(r) {
   const presence = r.online === undefined ? '' : r.online ? ', online agora' : ', offline';
   open.setAttribute('aria-label', `Conectar a ${r.name}${presence}, ${r.address}, ${r.detail}`);
   const thumbnail = el('span', 'miniatura');
-  thumbnail.innerHTML = MONITOR;
+  // A última imagem vista da tela dele; sem ela (nunca acessado daqui), o desenho de um monitor.
+  const picture = thumbnails[r.key];
+  if (typeof picture === 'string' && picture.startsWith('data:image/jpeg;base64,')) {
+    const img = el('img');
+    img.alt = '';
+    img.src = picture;
+    thumbnail.append(img);
+  } else {
+    thumbnail.innerHTML = MONITOR;
+  }
   const texts = el('span', 'item-textos');
   const name = el('span', 'item-nome');
   name.append(el('span', '', r.name));
@@ -263,7 +376,7 @@ function row(r) {
 function renderHome() {
   const saved = [...state.salvos].sort((a, b) => titleOf(a).localeCompare(titleOf(b), 'pt-BR', { sensitivity: 'base' }));
   $('salvos').replaceChildren(...saved.map((c) => row({
-    name: titleOf(c), address: c.address, detail: c.paired ? 'entra direto' : 'pede aprovação', highlight: c.paired,
+    key: c.key, name: titleOf(c), address: c.address, detail: c.paired ? 'entra direto' : 'pede aprovação', highlight: c.paired,
     online: online.get(c.key), open: () => connectTo(c.address), menu: () => savedMenu(c),
   })));
   $('salvos-vazio').hidden = saved.length > 0;
@@ -274,7 +387,8 @@ function renderHome() {
     return target && !keys.has(target.key);
   });
   $('recentes').replaceChildren(...recent.map((r) => row({
-    name: r.name || r.address, address: r.address, detail: when(r.time), open: () => connectTo(r.address), menu: () => recentMenu(r),
+    key: P.parseTarget(r.address)?.key, name: r.name || r.address, address: r.address, detail: when(r.time),
+    open: () => connectTo(r.address), menu: () => recentMenu(r),
   })));
   $('recentes-titulo').hidden = recent.length === 0;
 }
@@ -312,6 +426,8 @@ async function recentMenu(r) {
   else if (value === 'remover') {
     state.recentes = state.recentes.filter((x) => x !== r);
     save();
+    const key = P.parseTarget(r.address)?.key;
+    if (key && !state.salvos.some((c) => c.key === key)) dropThumbnail(key);
     renderHome();
   }
 }
@@ -332,15 +448,21 @@ async function editComputer(address, name, auto, isNew) {
   if (value !== 'salvar') return;
   const target = P.parseTarget(fields.address);
   const existing = state.salvos.find((c) => c.key === target.key);
+  // dirty: mudou aqui e ainda não foi para a conta (quando há conta).
   if (existing) {
     existing.name = fields.name.trim().slice(0, 100);
     existing.autoAccess = fields.auto;
+    existing.dirty = true;
   } else {
-    state.salvos.push({ key: target.key, address: target.shown, name: fields.name.trim().slice(0, 100), autoAccess: fields.auto, paired: false });
+    state.salvos.push({
+      key: target.key, address: target.shown, name: fields.name.trim().slice(0, 100), autoAccess: fields.auto, paired: false, dirty: true,
+    });
   }
+  state.contaRemover = state.contaRemover.filter((k) => k !== target.key);
   save();
   renderHome();
   checkPresence();
+  syncAccount();
 }
 
 async function removeSaved(c) {
@@ -351,38 +473,325 @@ async function removeSaved(c) {
   });
   if (value !== 'remover') return;
   state.salvos = state.salvos.filter((x) => x.key !== c.key);
+  // Guardado na conta: sai de lá também, na próxima conversa com ela.
+  if (c.synced && !state.contaRemover.includes(c.key)) state.contaRemover.push(c.key);
   save();
+  if (!state.recentes.some((r) => P.parseTarget(r.address)?.key === c.key)) dropThumbnail(c.key);
   renderHome();
+  syncAccount();
 }
 
 async function showMenu() {
   const { value } = await ask({
-    options: [{ label: 'Configurações', value: 'config' }, { label: 'Como usar no iPhone', value: 'iphone' }, { label: 'Sobre', value: 'sobre' }],
+    options: [
+      { label: 'Verificar atualização', value: 'atualizar' }, { label: 'Configurações', value: 'config' },
+      { label: 'Como usar no iPhone', value: 'iphone' }, { label: 'Sobre', value: 'sobre' },
+    ],
     buttons: [{ label: 'Fechar', value: null }],
   });
-  if (value === 'config') {
+  if (value === 'atualizar') checkUpdate(true);
+  else if (value === 'config') {
     const { value: ok, fields } = await ask({
       title: 'Configurações',
-      fields: [{ id: 'nome', label: 'Nome com que este aparelho aparece no computador', value: deviceName(), capitalize: 'words' }],
+      fields: [
+        { id: 'nome', label: 'Nome com que este aparelho aparece no computador', value: deviceName(), capitalize: 'words' },
+        { id: 'tema', label: 'Tema', value: state.tema, choices: [['auto', 'Automático (o do aparelho)'], ['claro', 'Claro'], ['escuro', 'Escuro']] },
+      ],
       buttons: [{ label: 'Cancelar', value: null }, { label: 'Salvar', value: 'salvar', kind: 'forte', submit: true }],
     });
     if (ok === 'salvar') {
       state.nome = fields.nome.trim().slice(0, 60);
+      state.tema = ['claro', 'escuro'].includes(fields.tema) ? fields.tema : 'auto';
       save();
+      applyTheme();
     }
   } else if (value === 'iphone') {
     await message('Como usar no iPhone',
       '1. Abra esta página no Safari.\n2. Toque em Compartilhar (o quadrado com a seta para cima).\n' +
       '3. Escolha "Adicionar à Tela de Início".\n\nO Ponte aparece entre os seus aplicativos e abre em tela cheia, sem a barra do Safari.\n\n' +
       'Na sessão: toque para clicar, segure e solte para o botão direito, segure e arraste (ou toque duas vezes e arraste) ' +
-      'para arrastar, dois dedos para rolar e a pinça para ampliar. "Touchpad" troca para um ponteiro que você move com o dedo.');
+      'para arrastar, dois dedos para rolar e a pinça para ampliar. "Touchpad" troca para um ponteiro que você move com o dedo.\n\n' +
+      'O som do computador sai pelo iPhone (Mais, "Desligar o som" para parar). Se não ouvir nada, toque uma vez na tela ' +
+      'do computador: o iPhone só libera o som depois de um toque.');
   } else if (value === 'sobre') {
     const id = P.formatId(await P.idFromSpki((await identity()).spki));
     await message('Ponte no navegador',
       `Versão ${VERSION}\n\nEndereço deste aparelho: ${id}\nÉ com esse número e o nome "${deviceName()}" que ele aparece na lista ` +
       'de computadores autorizados do Ponte no computador.\n\nA conexão é cifrada de ponta a ponta entre este aparelho e o ' +
-      'computador: o servidor só repassa os dados, sem conseguir ler. Este aparelho só acessa; ele não pode ser acessado.');
+      'computador: o servidor só repassa os dados, sem conseguir ler. Este aparelho só acessa; ele não pode ser acessado.\n\n' +
+      'As lives e os amigos ficam no Exilados: filabox3d.com.br/exilados');
   }
+}
+
+/** As lives e os amigos saíram do Ponte e agora ficam no Exilados (abre fora do Ponte, como no Android). */
+function openExilados() {
+  window.open(`${SITE}/exilados/`, '_blank', 'noopener');
+}
+
+// ---------- versão nova ----------
+
+/** "1.12.0" > "1.11.3"? */
+function newer(a, b) {
+  const pa = a.split('.').map(Number), pb = b.split('.').map(Number);
+  for (let i = 0; i < 3; i++) if ((pa[i] || 0) !== (pb[i] || 0)) return (pa[i] || 0) > (pb[i] || 0);
+  return false;
+}
+
+let lastUpdateCheck = 0;
+
+// A página no ar diz a versão dela em versao.txt. Aberto de novo, o Ponte já vem na versão nova (os arquivos vão
+// sem cache); o aviso serve para quem deixou o Ponte aberto (o iPhone guarda o aplicativo da tela de início aberto
+// por dias). Confere ao voltar para ele e a cada 30 min.
+async function checkUpdate(manual = false) {
+  if (!manual && (document.hidden || Date.now() - lastUpdateCheck < 30 * 60 * 1000)) return;
+  lastUpdateCheck = Date.now();
+  let available = '';
+  try {
+    const response = await fetch(new URL('versao.txt', location.href), { cache: 'no-store', signal: AbortSignal.timeout(15000) });
+    if (response.ok) available = (await response.text()).trim();
+  } catch { /* sem internet: confere na próxima */ }
+  const valid = /^\d+\.\d+\.\d+$/.test(available);
+  if (valid && newer(available, VERSION)) {
+    $('atualizar-texto').textContent = `Chegou a versão ${available} do Ponte.`;
+    $('atualizar').hidden = false;
+    if (manual) {
+      const { value } = await ask({
+        title: 'Versão nova',
+        message: `Chegou a versão ${available} do Ponte (esta é a ${VERSION}).${current ? ' Atualizar agora encerra a sessão.' : ''}`,
+        buttons: [{ label: 'Depois', value: null }, { label: 'Atualizar', value: 'sim', kind: 'forte', submit: true }],
+      });
+      if (value === 'sim') updateNow();
+    }
+  } else if (manual) {
+    await message('Atualização', valid ? `Você já está na versão mais nova (${VERSION}).` : 'Não foi possível conferir agora. Tente de novo em instantes.');
+  }
+}
+
+function updateNow() {
+  current?.session.close();
+  location.reload();
+}
+
+// ---------- conta (opcional) ----------
+
+let account = null;
+let accountLoaded = false;
+let syncing = false;
+let lastSync = 0;
+
+/** A conta deste aparelho, ou null. O token fica cifrado no aparelho; aberto uma vez, a conta fica na memória. */
+async function currentAccount() {
+  if (accountLoaded) return account;
+  accountLoaded = true;
+  const stored = state.conta;
+  const refresh = stored?.token ? await openToken(stored.token) : null;
+  account = refresh ? Account.restore(stored.email, stored.userId, refresh) : null;
+  if (account) account.onTokenChanged = keepAccount;
+  else if (stored) {
+    // O cofre deste aparelho foi apagado (dados do site limpos): sem o token, a conta não serve mais.
+    signOutLocally();
+  }
+  return account;
+}
+
+async function keepAccount(a) {
+  let token = '';
+  try { token = await sealToken(a.refreshToken); } catch { /* sem cofre (janela privada): a conta vale só nesta visita */ }
+  state.conta = { email: a.email, userId: a.userId, token };
+  save();
+}
+
+function showAccount() {
+  $('conta').textContent = state.conta ? `Conta: ${state.conta.email}` : 'Entrar na conta';
+}
+
+async function accountClicked() {
+  const a = await currentAccount();
+  if (!a) return showSignIn();
+  const { value } = await ask({
+    title: `Conta: ${a.email}`,
+    options: [
+      { label: 'Sincronizar a lista agora', value: 'sincronizar' },
+      { label: 'Criar ou gerenciar a conta no FilaBox', value: 'site' },
+      { label: 'Sair da conta neste aparelho', value: 'sair', kind: 'perigo' },
+    ],
+    buttons: [{ label: 'Fechar', value: null }],
+  });
+  if (value === 'sincronizar') syncAccount(true);
+  else if (value === 'site') window.open(`${SITE}/login`, '_blank', 'noopener');
+  else if (value === 'sair') signOut();
+}
+
+async function signedIn(a) {
+  a.onTokenChanged = keepAccount;
+  account = a;
+  accountLoaded = true;
+  await keepAccount(a);
+  showAccount();
+  syncAccount(true, `Você entrou como ${a.email}.`);
+}
+
+/** A conta que acabou de entrar pela janela de e-mail e senha. */
+let signingIn = null;
+
+/** Entrar com a conta do FilaBox: e-mail e senha, ou Google. Entrar é opcional. */
+async function showSignIn() {
+  const { value, fields } = await ask({
+    title: 'Entrar com a conta do FilaBox',
+    message: 'Os computadores que você salvar ficam na conta e aparecem em qualquer aparelho em que você entrar. ' +
+      'Cada conta vê só os próprios. Entrar é opcional.',
+    fields: [
+      { id: 'email', label: 'E-mail', type: 'email', inputmode: 'email' },
+      { id: 'senha', label: 'Senha', type: 'password' },
+    ],
+    links: [{ label: 'Criar conta no FilaBox', href: `${SITE}/login` }, { label: 'Esqueci a senha', href: `${SITE}/recuperar-senha` }],
+    busy: 'Entrando...',
+    validate: async (f, chosen) => {
+      if (chosen !== 'entrar') return '';
+      if (!f.email.trim() || !f.senha) return 'Preencha o e-mail e a senha.';
+      try {
+        signingIn = await Account.signIn(f.email, f.senha);
+        return '';
+      } catch (error) {
+        return error?.message || 'Não foi possível entrar.';
+      }
+    },
+    buttons: [
+      { label: 'Cancelar', value: null },
+      { label: 'Google', value: 'google' },
+      { label: 'Entrar', value: 'entrar', kind: 'forte', submit: true },
+    ],
+  });
+  if (value === 'entrar' && signingIn) {
+    const a = signingIn;
+    signingIn = null;
+    await signedIn(a);
+  } else if (value === 'google') {
+    startGoogle();
+  }
+}
+
+// O login com Google sai desta página e volta a ela com ?code= (o Supabase do FilaBox aceita este endereço de
+// volta). O segredo do PKCE espera aqui, guardado, pelo retorno.
+const GOOGLE_KEY = 'ponte-google';
+
+async function startGoogle() {
+  const back = new URL('./', location.href);
+  // A página aberta nesta máquina (testes) volta com os servidores de teste que ela usava.
+  if (['localhost', '127.0.0.1', '[::1]'].includes(location.hostname)) {
+    const asked = new URLSearchParams(location.search);
+    for (const name of ['relay', 'conta']) if (asked.get(name)) back.searchParams.set(name, asked.get(name));
+  }
+  const { url, verifier } = await Account.startGoogle(back.href);
+  try { localStorage.setItem(GOOGLE_KEY, JSON.stringify({ verifier, time: Date.now() })); } catch { /* sem como guardar */ }
+  location.href = url;
+}
+
+async function finishGoogle() {
+  const query = new URLSearchParams(location.search);
+  const hash = new URLSearchParams(location.hash.slice(1));
+  const code = query.get('code');
+  const failure = query.get('error_description') || query.get('error') || hash.get('error_description') || hash.get('error');
+  if (!code && !failure) return;
+  // Tira o código do endereço: ele não serve de novo e não deve ficar no histórico.
+  history.replaceState(null, '', location.pathname);
+  let pending = null;
+  try { pending = JSON.parse(localStorage.getItem(GOOGLE_KEY) || 'null'); } catch { pending = null; }
+  try { localStorage.removeItem(GOOGLE_KEY); } catch { /* nada */ }
+  if (failure) {
+    await message('Login com Google', `O Google não concluiu o login: ${failure}`);
+    return;
+  }
+  if (!pending?.verifier || Date.now() - pending.time > 15 * 60 * 1000) {
+    await message('Login com Google', 'O login com Google não voltou para o Ponte a tempo. Tente de novo.');
+    return;
+  }
+  try {
+    await signedIn(await Account.finishGoogle(code, pending.verifier));
+  } catch (error) {
+    await message('Login com Google', error?.message || 'Não foi possível entrar.');
+  }
+}
+
+/**
+ * Confere a lista com a conta, como o Android: o que chegou da conta entra (ou atualiza o nome); o que saiu da conta
+ * sai daqui, menos o que mudou aqui e ainda não foi; e o que é daqui e ainda não está na conta vai para ela.
+ */
+async function syncAccount(manual = false, greeting = '') {
+  const a = await currentAccount();
+  if (!a || syncing) return;
+  syncing = true;
+  lastSync = Date.now();
+  try {
+    for (const key of [...state.contaRemover]) {
+      await a.delete(key);
+      state.contaRemover = state.contaRemover.filter((k) => k !== key);
+      save();
+    }
+    const remote = await a.list();
+    const remoteKeys = new Set(remote.map((r) => r.key));
+    let added = 0;
+    for (const r of remote) {
+      const target = P.parseTarget(r.address);
+      // Computador salvo pelo IP em outro aparelho: o navegador não conecta pelo IP, então ele não aparece aqui.
+      if (!target || target.key !== r.key) continue;
+      const local = state.salvos.find((c) => c.key === r.key);
+      if (!local) {
+        state.salvos.push({ key: r.key, address: target.shown, name: r.name.slice(0, 100), autoAccess: r.autoAccess, paired: false, synced: true });
+        added++;
+      } else if (!local.dirty) {
+        local.name = r.name.slice(0, 100);
+        local.autoAccess = r.autoAccess;
+        local.synced = true;
+      }
+    }
+    const gone = state.salvos.filter((c) => c.synced && !c.dirty && !remoteKeys.has(c.key));
+    state.salvos = state.salvos.filter((c) => !gone.includes(c));
+    gone.forEach((c) => dropThumbnail(c.key));
+    const push = state.salvos.filter((c) => c.dirty || !c.synced);
+    save();
+    await a.upsert(push.map((c) => ({ key: c.key, address: c.address, name: c.name, autoAccess: c.autoAccess })));
+    for (const c of push) {
+      c.synced = true;
+      c.dirty = false;
+    }
+    save();
+    if (!current) renderHome();
+    checkPresence();
+    const changes = added + gone.length > 0 ? `Lista da conta atualizada: ${added} chegaram, ${gone.length} saíram.` : '';
+    if (greeting || changes) toast([greeting, changes].filter(Boolean).join(' '));
+    else if (manual) toast('A lista já está igual à da conta.');
+  } catch (error) {
+    const text = error?.message || 'Falha na conta.';
+    // A conta saiu deste aparelho (senha trocada, sessão encerrada em outro lugar): volta ao modo sem conta.
+    if (text.startsWith('A conta saiu')) signOut(text);
+    else if (manual) await message('Conta', text);
+  } finally {
+    syncing = false;
+  }
+}
+
+/**
+ * Sai da conta neste aparelho: os computadores que vieram dela (ou foram para ela) somem daqui, para a próxima
+ * pessoa que usar o aparelho não ver a lista de outra. O que foi salvo sem conta fica.
+ */
+function signOutLocally() {
+  const mine = state.salvos.filter((c) => c.synced);
+  state.salvos = state.salvos.filter((c) => !c.synced);
+  mine.forEach((c) => dropThumbnail(c.key));
+  state.contaRemover = [];
+  state.conta = null;
+  save();
+  account = null;
+  showAccount();
+}
+
+function signOut(reason) {
+  const leaving = account;
+  signOutLocally();
+  leaving?.signOut();
+  if (!current) renderHome();
+  message('Conta', reason || 'Você saiu da conta neste aparelho. Os computadores dela não aparecem mais aqui.');
 }
 
 // ---------- bolinha de online ----------
@@ -441,12 +850,139 @@ function setStatus(text) {
 }
 
 let toastTimer = 0;
+/** Aviso curto no alto da tela: o da sessão durante ela, o da tela inicial fora dela. */
 function toast(text) {
-  const p = $('sessao-aviso');
+  const inSession = !$('sessao').hidden;
+  const p = $(inSession ? 'sessao-aviso' : 'inicio-aviso');
+  $(inSession ? 'inicio-aviso' : 'sessao-aviso').hidden = true;
   p.textContent = text;
   p.hidden = false;
   clearTimeout(toastTimer);
   toastTimer = setTimeout(() => { p.hidden = true; }, 5000);
+}
+
+// ---------- som ----------
+
+const SOUND_LEAD = 0.15;   // folga no começo e depois de cada falha da rede, em segundos
+const SOUND_MAX = 0.6;     // fila máxima: acima disso o pedaço é descartado, para o atraso não ir crescendo
+
+/**
+ * Toca o som que chega do computador (pedaços de 20 ms), cada um logo depois do anterior. O iPhone só deixa o
+ * som começar depois de um toque: unlock() é chamado no toque em Conectar, em "Ligar o som" e na tela da sessão.
+ */
+class Som {
+  constructor() {
+    this.ctx = null;
+    this.out = null;
+    this.next = 0;
+  }
+
+  unlock() {
+    try {
+      if (!this.ctx) {
+        const Context = window.AudioContext || window.webkitAudioContext;
+        if (!Context) return;
+        this.ctx = new Context({ latencyHint: 'interactive' });
+      }
+      // Com a chave de silencioso ligada, o iPhone cala o som de página; o do computador é como o de um vídeo.
+      if (navigator.audioSession) navigator.audioSession.type = 'playback';
+      if (this.ctx.state === 'running') return;
+      this.ctx.resume().catch(() => {});
+      // Versões antigas do iPhone só soltam o som tocando algo dentro do próprio toque.
+      const source = this.ctx.createBufferSource();
+      source.buffer = this.ctx.createBuffer(1, 1, 22050);
+      source.connect(this.ctx.destination);
+      source.start(0);
+    } catch { /* sem som neste navegador: a sessão segue */ }
+  }
+
+  play(sound) {
+    const ctx = this.ctx;
+    const frames = Math.floor(sound.samples.length / sound.channels);
+    if (!ctx || ctx.state !== 'running' || frames === 0) return;
+    if (!this.out) {
+      this.out = ctx.createGain();
+      this.out.connect(ctx.destination);
+      this.next = 0;
+    }
+    const now = ctx.currentTime;
+    if (this.next < now + 0.01) this.next = now + SOUND_LEAD;
+    else if (this.next > now + SOUND_MAX) return;
+    const buffer = ctx.createBuffer(sound.channels, frames, sound.rate);
+    for (let c = 0; c < sound.channels; c++) {
+      const data = buffer.getChannelData(c);
+      for (let i = 0; i < frames; i++) data[i] = sound.samples[i * sound.channels + c] / 32768;
+    }
+    const source = ctx.createBufferSource();
+    source.buffer = buffer;
+    source.connect(this.out);
+    source.start(this.next);
+    this.next += buffer.duration;
+  }
+
+  /** Para na hora o que estava na fila; o próximo pedaço recomeça com a folga. */
+  silence() {
+    this.out?.disconnect();
+    this.out = null;
+    this.next = 0;
+    if (navigator.audioSession) {
+      try { navigator.audioSession.type = 'auto'; } catch { /* nada */ }
+    }
+  }
+}
+
+const sound = new Som();
+
+/** Manda ao computador o monitor, a qualidade e o som desta sessão. */
+function sendSettings(c, quality = state.qualidade) {
+  c.session.sendSettings(c.screen, quality, c.soundOn);
+}
+
+async function toggleSound(c) {
+  c.soundOn = !c.soundOn;
+  state.som = c.soundOn;
+  save();
+  if (c.soundOn) sound.unlock();
+  else sound.silence();
+  sendSettings(c);
+  toast(c.soundOn ? 'Som ligado: você ouve o que o computador está tocando.' : 'Som desligado.');
+}
+
+// ---------- tela cheia ----------
+
+/** Sem a barra de comandos (e sem a do navegador, onde ele deixa): o botão "Comandos", num canto, traz de volta. */
+function setFullScreen(on, announce = true) {
+  state.telaCheia = on;
+  save();
+  $('sessao').classList.toggle('tela-cheia', on);
+  $('b-comandos').hidden = !on;
+  if (on) {
+    $('digitar').blur();
+    if (!document.fullscreenElement) document.documentElement.requestFullscreen?.().catch(() => {});
+    if (announce) toast('Tela cheia. Para voltar aos comandos, toque em "Comandos", no canto de baixo.');
+  } else if (document.fullscreenElement) {
+    document.exitFullscreen?.().catch(() => {});
+  }
+  current?.tela.resize();
+}
+
+// ---------- miniatura ----------
+
+/** A última imagem vista da tela, pequena (320×180, como no Android), para a lista da tela inicial. */
+function saveThumbnail(c) {
+  const tela = c.tela;
+  if (!tela.width || !tela.height) return;
+  const small = document.createElement('canvas');
+  const scale = Math.min(320 / tela.width, 180 / tela.height, 1);
+  small.width = Math.max(1, Math.round(tela.width * scale));
+  small.height = Math.max(1, Math.round(tela.height * scale));
+  const ctx = small.getContext('2d');
+  ctx.imageSmoothingQuality = 'high';
+  ctx.drawImage(tela.image, 0, 0, small.width, small.height);
+  try {
+    thumbnails[c.session.target.key] = small.toDataURL('image/jpeg', 0.8);
+    saveThumbnails();
+  } catch { /* sem a miniatura a lista mostra o desenho de um monitor */ }
 }
 
 // Com o teclado aberto, o iPhone encolhe só a área visível: a sessão acompanha, para a barra ficar à vista.
@@ -467,6 +1003,8 @@ function openSessionScreen(status) {
   $('teclas').hidden = true;
   $('b-teclas').classList.remove('ativo');
   $('b-modo').textContent = state.touchpad ? 'Touchpad' : 'Toque';
+  $('sessao').classList.toggle('tela-cheia', state.telaCheia);
+  $('b-comandos').hidden = !state.telaCheia;
   setStatus(status);
   fitViewport();
   // Tela acesa durante a sessão (onde o navegador deixa).
@@ -478,6 +1016,7 @@ function closeSessionScreen() {
   $('inicio').hidden = false;
   document.body.classList.remove('em-sessao');
   $('digitar').blur();
+  if (document.fullscreenElement) document.exitFullscreen?.().catch(() => {});
   wakeLock?.release().catch(() => {});
   wakeLock = null;
   renderHome();
@@ -519,10 +1058,9 @@ function streamToken(text) {
 }
 
 async function connectTo(text) {
-  // Link (ou código) de uma transmissão de tela: abre a página de assistir.
-  const stream = streamToken(text);
-  if (stream) {
-    location.href = new URL(`assistir/#${stream}`, location.href).href;
+  // Link (ou código) de uma transmissão de tela antiga: as lives agora ficam no Exilados.
+  if (streamToken(text)) {
+    showAddressError('As lives saíram do Ponte e agora ficam no Exilados: filabox3d.com.br/exilados');
     return;
   }
   const target = P.parseTarget(text);
@@ -532,6 +1070,8 @@ async function connectTo(text) {
   }
   if (current || connecting) return;
   showAddressError('');
+  // Ainda dentro do toque em Conectar: é o que libera o som no iPhone.
+  if (state.som) sound.unlock();
   const saved = state.salvos.find((c) => c.key === target.key);
   openSessionScreen(`Conectando a ${saved?.name || target.shown}...\nSe for a primeira vez, alguém precisa aceitar o pedido no computador.`);
   const attempt = { cancelled: false };
@@ -576,14 +1116,24 @@ function startSession(session) {
   const tela = new Tela(session);
   const keyboard = new Teclado(session, tela);
   const primary = Math.max(0, session.screens.findIndex((s) => s.Primary));
-  current = { session, tela, keyboard, screen: primary, clipboard: '' };
+  const c = { session, tela, keyboard, screen: primary, clipboard: '', soundOn: session.hasSound && state.som, thumbnailTimer: 0 };
+  current = c;
   renderKeys();
   setStatus('Recebendo a imagem...');
-  session.sendSettings(primary, state.qualidade);
+  sendSettings(c);
+  // A miniatura da tela inicial: logo que a imagem aparece e, depois, de minuto em minuto.
+  tela.onFirstImage = () => {
+    c.thumbnailTimer = setTimeout(function keep() {
+      if (current !== c) return;
+      saveThumbnail(c);
+      c.thumbnailTimer = setTimeout(keep, 60000);
+    }, 2000);
+  };
   session.run({
     onFrame: (frame) => tela.frame(frame),
     onPointer: (shape) => tela.setShape(shape),
     onPointerPosition: (x, y, onScreen) => tela.remotePointer(x, y, onScreen),
+    onSound: (s) => { if (c.soundOn && current === c) sound.play(s); },
     onClipboard: (text) => {
       current.clipboard = text;
       toast('O computador copiou um texto. Para trazer para cá: Mais, "Copiar o que foi copiado lá".');
@@ -597,6 +1147,9 @@ async function endSession(reason) {
   const ending = current;
   if (!ending) return;
   current = null;
+  clearTimeout(ending.thumbnailTimer);
+  if (ending.tela.frames > 0) saveThumbnail(ending);
+  sound.silence();
   ending.tela.dispose();
   closeOpenDialog?.(null);
   closeSessionScreen();
@@ -687,6 +1240,7 @@ class Tela {
     this.wheelRemainder = 0;
     this.lastMoveSent = 0;
     this.frames = 0;
+    this.onFirstImage = null;
     this.raf = 0;
     this.closed = new AbortController();
     this.listen();
@@ -722,8 +1276,8 @@ class Tela {
   askWholeFrame() {
     if (!current) return;
     const q = state.qualidade;
-    this.session.sendSettings(current.screen, q === 100 ? 99 : q + 1);
-    this.session.sendSettings(current.screen, q);
+    sendSettings(current, q === 100 ? 99 : q + 1);
+    sendSettings(current, q);
   }
 
   async apply(frame) {
@@ -745,7 +1299,10 @@ class Tela {
       this.imageCtx.drawImage(images[i], t.x, t.y, t.width, t.height);
       images[i].close?.();
     });
-    if (++this.frames === 1) setStatus('');
+    if (++this.frames === 1) {
+      setStatus('');
+      this.onFirstImage?.();
+    }
     this.invalidate();
   }
 
@@ -989,6 +1546,8 @@ class Tela {
 
   down(e) {
     e.preventDefault();
+    // Um toque na tela também libera o som (o iPhone pode tê-lo segurado, como ao voltar de outro aplicativo).
+    if (current?.soundOn) sound.unlock();
     try { this.canvas.setPointerCapture(e.pointerId); } catch { /* toque que o navegador já soltou */ }
     if (e.pointerType === 'mouse') {
       this.mouse(e, 'down');
@@ -1183,7 +1742,7 @@ class Tela {
 const VK = {
   BACK: 0x08, TAB: 0x09, RETURN: 0x0d, SHIFT: 0x10, CONTROL: 0x11, ALT: 0x12, ESCAPE: 0x1b,
   PAGE_UP: 0x21, PAGE_DOWN: 0x22, END: 0x23, HOME: 0x24, LEFT: 0x25, UP: 0x26, RIGHT: 0x27, DOWN: 0x28,
-  INSERT: 0x2d, DELETE: 0x2e, WIN: 0x5b, F1: 0x70,
+  PRINT_SCREEN: 0x2c, INSERT: 0x2d, DELETE: 0x2e, WIN: 0x5b, F1: 0x70, F4: 0x73,
 };
 
 /** Teclas que o Windows espera marcadas como "estendidas", para não confundir com o teclado numérico. */
@@ -1218,6 +1777,12 @@ class Teclado {
 
   press(vk) {
     this.withArmed(() => this.key(vk));
+  }
+
+  /** Atalho: aperta as teclas na ordem e solta na ordem contrária (Ctrl, C; solta C, Ctrl). */
+  combo(...vks) {
+    vks.forEach((vk) => this.down(vk));
+    [...vks].reverse().forEach((vk) => this.up(vk));
   }
 
   withArmed(act) {
@@ -1375,17 +1940,23 @@ async function showMore() {
   if (!current) return;
   const c = current;
   const options = [
+    { label: 'Atalhos de teclado', value: 'atalhos' },
     { label: 'Ver a tela inteira', value: 'inteira' },
+    { label: 'Tela cheia', value: 'cheia' },
     { label: 'Digitar um texto', value: 'texto' },
     { label: 'Colar aqui o texto copiado no aparelho', value: 'colar' },
   ];
   if (c.clipboard) options.push({ label: 'Copiar o que foi copiado lá', value: 'copiar' });
+  if (c.session.hasSound) options.push({ label: c.soundOn ? 'Desligar o som' : 'Ligar o som', value: 'som' });
   options.push({ label: 'Qualidade da imagem', value: 'qualidade' });
   if (c.session.screens.length > 1) options.push({ label: 'Trocar de monitor', value: 'monitor' });
   options.push({ label: 'Sobre esta conexão', value: 'sobre' });
   const { value } = await ask({ options, buttons: [{ label: 'Fechar', value: null }] });
   if (current !== c) return;
-  if (value === 'inteira') c.tela.fit();
+  if (value === 'atalhos') chooseShortcut(c);
+  else if (value === 'som') toggleSound(c);
+  else if (value === 'cheia') setFullScreen(true);
+  else if (value === 'inteira') c.tela.fit();
   else if (value === 'texto') typeText(c);
   else if (value === 'colar') pasteText(c);
   else if (value === 'copiar') {
@@ -1398,6 +1969,34 @@ async function showMore() {
   } else if (value === 'qualidade') chooseQuality(c);
   else if (value === 'monitor') chooseScreen(c);
   else if (value === 'sobre') aboutConnection(c);
+}
+
+const letter = (char) => char.charCodeAt(0);
+const SHORTCUTS = [
+  ['Copiar (Ctrl+C)', VK.CONTROL, letter('C')],
+  ['Colar (Ctrl+V)', VK.CONTROL, letter('V')],
+  ['Recortar (Ctrl+X)', VK.CONTROL, letter('X')],
+  ['Desfazer (Ctrl+Z)', VK.CONTROL, letter('Z')],
+  ['Selecionar tudo (Ctrl+A)', VK.CONTROL, letter('A')],
+  ['Trocar de janela (Alt+Tab)', VK.ALT, VK.TAB],
+  ['Fechar janela (Alt+F4)', VK.ALT, VK.F4],
+  ['Menu Iniciar (Windows)', VK.WIN],
+  ['Área de trabalho (Windows+D)', VK.WIN, letter('D')],
+  ['Executar (Windows+R)', VK.WIN, letter('R')],
+  ['Gerenciador de Tarefas (Ctrl+Shift+Esc)', VK.CONTROL, VK.SHIFT, VK.ESCAPE],
+  ['Print Screen', VK.PRINT_SCREEN],
+];
+
+async function chooseShortcut(c) {
+  const { value } = await ask({
+    title: 'Atalhos de teclado',
+    options: SHORTCUTS.map(([label], i) => ({ label, value: i })),
+    buttons: [{ label: 'Fechar', value: null }],
+  });
+  if (value === null || current !== c) return;
+  const [label, ...keys] = SHORTCUTS[value];
+  c.keyboard.combo(...keys);
+  toast(`${label} enviado.`);
 }
 
 async function typeText(c, initial = '', title = 'Digitar um texto') {
@@ -1432,7 +2031,7 @@ async function chooseQuality(c) {
   if (value === null || current !== c) return;
   state.qualidade = value;
   save();
-  c.session.sendSettings(c.screen, value);
+  sendSettings(c, value);
 }
 
 async function chooseScreen(c) {
@@ -1445,7 +2044,7 @@ async function chooseScreen(c) {
   });
   if (value === null || current !== c) return;
   c.screen = value;
-  c.session.sendSettings(value, state.qualidade);
+  sendSettings(c);
   c.tela.fit();
 }
 
@@ -1453,7 +2052,8 @@ async function aboutConnection(c) {
   const s = c.session;
   await message(s.hostName || s.target.shown,
     `ID: ${s.target.shown}\nPonte lá: ${s.hostVersion || 'versão antiga'}\n` +
-    `${s.paired ? 'Este aparelho está autorizado: entra sem aprovação.' : 'Este aparelho ainda não está autorizado a entrar direto.'}\n\n` +
+    `${s.paired ? 'Este aparelho está autorizado: entra sem aprovação.' : 'Este aparelho ainda não está autorizado a entrar direto.'}\n` +
+    `Som: ${!s.hasSound ? 'o computador não transmite' : c.soundOn ? 'ligado' : 'desligado'}\n\n` +
     `Identidade do computador:\n${s.fingerprint.slice(0, 32).replace(/(.{4})/g, '$1 ').trim()}…\n\n` +
     'A conexão é cifrada de ponta a ponta: o servidor só repassa os dados.');
 }
@@ -1506,6 +2106,10 @@ function init() {
   $('b-modo').onclick = toggleMode;
   $('b-mais').onclick = showMore;
   $('b-sair').onclick = leave;
+  $('b-comandos').onclick = () => setFullScreen(false);
+  $('conta').onclick = accountClicked;
+  $('exilados').onclick = openExilados;
+  $('atualizar-agora').onclick = updateNow;
   document.addEventListener('keydown', (event) => {
     if (current && !$('dialogo').open) handleKeydown(event);
   });
@@ -1513,7 +2117,13 @@ function init() {
   document.addEventListener('gesturestart', (event) => { if (current || connecting) event.preventDefault(); });
   window.visualViewport?.addEventListener('resize', fitViewport);
   window.visualViewport?.addEventListener('scroll', fitViewport);
-  document.addEventListener('visibilitychange', () => { if (!document.hidden) checkPresence(); });
+  // Ao voltar para o Ponte: bolinhas, versão nova e a lista da conta (no máximo uma vez por minuto).
+  document.addEventListener('visibilitychange', () => {
+    if (document.hidden) return;
+    checkPresence();
+    checkUpdate();
+    if (!current && Date.now() - lastSync > 60000) syncAccount();
+  });
 
   if (isIos && !standalone && state.dicaInstalar) $('instalar').hidden = false;
   $('instalar-fechar').onclick = () => {
@@ -1526,10 +2136,17 @@ function init() {
   const shared = P.parseTarget(new URLSearchParams(location.search).get('id') || '');
   if (shared) address.value = shared.shown;
 
+  applyTheme();
   renderHome();
   showVersion();
+  showAccount();
   checkPresence();
   setInterval(checkPresence, 30000);
+  setInterval(() => checkUpdate(), 30 * 60 * 1000 + 1000);
+  setTimeout(() => checkUpdate(), 5000);
+  // Volta do login com Google (?code=) ou, sem ele, a conferência da lista com a conta ao abrir.
+  if (/[?&#](code|error)=/.test(location.search + location.hash)) finishGoogle();
+  else syncAccount();
 }
 
 init();

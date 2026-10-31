@@ -17,8 +17,9 @@
   color-scheme: light;
 }
 
+/* Escuro: o do aparelho (tema automático) ou escolhido nas Configurações. */
 @media (prefers-color-scheme: dark) {
-  :root {
+  :root:not([data-tema="claro"]) {
     --destaque: #61d2df;
     --destaque-forte: #8ee3ec;
     --fundo: #121a1d;
@@ -29,6 +30,18 @@
     --perigo: #f2b8b5;
     color-scheme: dark;
   }
+}
+
+:root[data-tema="escuro"] {
+  --destaque: #61d2df;
+  --destaque-forte: #8ee3ec;
+  --fundo: #121a1d;
+  --cartao: #202b30;
+  --contorno: #46565e;
+  --texto: #edf4f6;
+  --fraco: #b4c3ca;
+  --perigo: #f2b8b5;
+  color-scheme: dark;
 }
 
 * { box-sizing: border-box; }
@@ -64,6 +77,7 @@ h2 {
 }
 .fraco { color: var(--fraco); }
 #versao { margin: 2px 0 0; font-size: 13px; }
+.conta { min-height: 32px; padding: 0; font-size: 14px; text-align: left; overflow-wrap: anywhere; }
 
 .icone {
   width: 44px; height: 44px; flex: none;
@@ -95,6 +109,7 @@ h2 {
 .principal:active { background: var(--destaque-forte); }
 .secundario { border: 1px solid var(--destaque); background: transparent; color: var(--destaque); }
 .link { border: 0; background: none; padding: 6px 0; color: var(--destaque); font-weight: 600; }
+.largo { display: block; width: 100%; margin-top: 12px; }
 .erro { margin: 8px 0 0; color: var(--perigo); font-size: 14px; }
 .vazio { margin: 0; font-size: 14px; }
 
@@ -125,6 +140,7 @@ h2 {
   display: grid; place-items: center; color: var(--fraco);
 }
 .miniatura svg { width: 30px; height: 30px; }
+.miniatura img { width: 100%; height: 100%; object-fit: cover; border-radius: 8px; }
 .item-textos { min-width: 0; display: flex; flex-direction: column; }
 .item-nome { display: flex; align-items: center; gap: 6px; min-width: 0; font-size: 17px; font-weight: 700; }
 .item-nome span:first-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -155,6 +171,8 @@ dialog::backdrop { background: rgba(0, 0, 0, 0.45); }
 .janela .nota { font-size: 14px; color: var(--fraco); }
 .janela .marcar { display: flex; gap: 10px; align-items: flex-start; margin-top: 12px; }
 .janela .marcar input { width: 22px; height: 22px; margin: 1px 0 0; accent-color: var(--destaque); }
+.janela a.link { display: block; margin-top: 8px; text-decoration: none; }
+select.campo { appearance: none; -webkit-appearance: none; }
 .botoes { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 8px; margin-top: 18px; }
 .botoes button { min-height: 44px; padding: 0 16px; border-radius: 10px; border: 0; background: transparent; color: var(--destaque); font-weight: 600; }
 .botoes button.forte { background: var(--botao); color: var(--texto-botao); }
@@ -188,6 +206,7 @@ body.em-sessao { overflow: hidden; overscroll-behavior: none; }
   max-width: min(480px, 92vw); margin: 0; padding: 10px 14px; border-radius: 12px;
   background: rgba(0, 0, 0, 0.78); color: #fff; font-size: 14px; pointer-events: none;
 }
+.toast.fixo { position: fixed; z-index: 10; width: max-content; }
 
 #digitar {
   position: absolute; left: 0; bottom: 0; width: 1px; height: 1px; padding: 0; border: 0;
@@ -212,3 +231,11 @@ body.em-sessao { overflow: hidden; overscroll-behavior: none; }
 }
 .barra button { flex: 1; min-width: 0; padding: 0 6px; }
 .barra button.ativo { background: var(--botao); }
+
+/* Tela cheia: só a imagem; "Comandos", num canto e meio transparente, traz a barra de volta. */
+#sessao.tela-cheia .barra, #sessao.tela-cheia .teclas { display: none; }
+.comandos {
+  position: absolute; right: calc(env(safe-area-inset-right) + 10px); bottom: calc(env(safe-area-inset-bottom) + 10px);
+  min-height: 36px; padding: 0 12px; border: 0; border-radius: 18px;
+  background: rgba(0, 0, 0, 0.45); color: rgba(255, 255, 255, 0.85); font-size: 13px; font-weight: 600;
+}

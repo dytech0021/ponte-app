@@ -19,8 +19,11 @@ internal static class Ui
         _ => SystemColorMode.System,
     });
 
-    public static Icon MakeIcon()
+    /// <summary>Ícone do Ponte (o mesmo do executável), no tamanho pedido ou com todos os tamanhos.</summary>
+    public static Icon MakeIcon(Size? size = null)
     {
+        using var stream = typeof(Ui).Assembly.GetManifestResourceStream("ponte.ico");
+        if (stream is not null) return size is { } s ? new Icon(stream, s) : new Icon(stream);
         using var bmp = new Bitmap(32, 32);
         using (var g = Graphics.FromImage(bmp))
         {

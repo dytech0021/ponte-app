@@ -94,29 +94,6 @@ class AtualizacaoTest {
         }
     }
 
-    @Test @Config(sdk = [35]) fun avisoAssistindoMenosNaJanelaFlutuante() {
-        val context = RuntimeEnvironment.getApplication()
-        Store(context).relayServer = "filabox3d.com.br:7412"
-        UpdateFlow.automatic = false
-        UpdateFlow.State.reset()
-        UpdateFlow.State.ready = nova
-        org.robolectric.Shadows.shadowOf(context.packageManager).setSystemFeature(android.content.pm.PackageManager.FEATURE_PICTURE_IN_PICTURE, true)
-        try {
-            val controller = Robolectric.buildActivity(AssistirActivity::class.java,
-                android.content.Intent(context, AssistirActivity::class.java).putExtra(AssistirActivity.EXTRA_URL, "https://filabox3d.com.br/ponte/assistir/#e7tlSerFPTfyRrKetKT5TNVl")).setup()
-            val activity = controller.get()
-            assertEquals(android.view.View.VISIBLE, aviso(activity).visibility)
-            activity.enterPip(fromButton = true)
-            // No aparelho o Android avisa a tela da mudança; o Android simulado só muda o estado.
-            activity.onPictureInPictureModeChanged(true, activity.resources.configuration)
-            org.robolectric.Shadows.shadowOf(android.os.Looper.getMainLooper()).idle()
-            assertEquals(android.view.View.GONE, aviso(activity).visibility)
-            controller.pause().stop().destroy()
-        } finally {
-            UpdateFlow.State.reset()
-        }
-    }
-
     private fun resposta(status: Int, extra: android.content.Intent.() -> Unit = {}): AtualizacaoActivity {
         val context = RuntimeEnvironment.getApplication()
         val intent = android.content.Intent(context, AtualizacaoActivity::class.java)

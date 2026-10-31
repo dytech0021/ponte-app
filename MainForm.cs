@@ -27,9 +27,7 @@ internal sealed class MainForm : Form
     private readonly Button _checkUpdate;
     private string _offeredVersion = "";
     private bool _balloonOffersUpdate;
-    private readonly List<StreamViewerForm> _streams = new();
     private readonly NotifyIcon _tray;
-    private BroadcastDialog? _broadcastDialog;
     private readonly Button _accountButton;
     private Account? _account;
     private readonly SemaphoreSlim _syncGate = new(1, 1);
@@ -76,27 +74,16 @@ internal sealed class MainForm : Form
             dialog.ShowDialog(this);
             UpdateStatus();
         };
-        Ui.Text(local, "Celular e transmissão:", 16, 382, 288);
+        Ui.Text(local, "Celular e lives:", 16, 382, 288);
         var phone = Ui.Button(local, "Aplicativo para celular...", 16, 406, 170);
         phone.Click += (_, _) =>
         {
             using var dialog = new AndroidAppDialog(_config);
             dialog.ShowDialog(this);
         };
-        // Transmitir a tela (jogos): quem tem o link só assiste. A janela fica aberta enquanto a transmissão durar.
-        var broadcast = Ui.Button(local, "Transmitir a tela...", 192, 406, 112);
-        broadcast.Click += (_, _) =>
-        {
-            if (_broadcastDialog is { IsDisposed: false } open)
-            {
-                if (open.WindowState == FormWindowState.Minimized) open.WindowState = FormWindowState.Normal;
-                open.Activate();
-                return;
-            }
-            _broadcastDialog = new BroadcastDialog(_host, _config);
-            _broadcastDialog.FormClosed += (_, _) => _broadcastDialog = null;
-            _broadcastDialog.Show(this);
-        };
+        // As lives e os amigos saíram do Ponte e agora ficam no Exilados (texto, voz e lives do grupo).
+        var lives = Ui.Button(local, "Lives no Exilados...", 192, 406, 112);
+        lives.Click += (_, _) => Process.Start(new ProcessStartInfo("https://filabox3d.com.br/exilados/") { UseShellExecute = true })?.Dispose();
 
         var remote = new GroupBox { Text = "Computador remoto", Location = new Point(344, 12), Size = new Size(404, 470) };
         Ui.Text(remote, "Endereço (ID ou IP)", 16, 26, 372);
@@ -206,8 +193,8 @@ internal sealed class MainForm : Form
         _version.Text = $"Ponte {Updater.Current}, {mode}{(note.Length > 0 ? " - " + note : "")}";
     }
 
-    // Ninguém conectado, nada sendo transmitido ou assistido.
-    private bool Idle => _host.Current is null && _viewers.Count == 0 && _streams.Count == 0 && _broadcastDialog is not { Active: true };
+    // Ninguém conectado nem acessando outro computador.
+    private bool Idle => _host.Current is null && _viewers.Count == 0;
 
     // Alguém usando a janela do Ponte agora: a atualização pergunta em vez de reiniciar sozinha.
     private bool InUse => Visible && WindowState != FormWindowState.Minimized && Native.IdleTime < TimeSpan.FromMinutes(10);
@@ -352,8 +339,6 @@ internal sealed class MainForm : Form
         var ending = new List<string>();
         if (_host.Current is { } session) ending.Add($"a sessão de {session.PeerName} neste computador");
         if (_viewers.Count > 0) ending.Add(_viewers.Count == 1 ? "o acesso ao outro computador" : $"os {_viewers.Count} acessos a outros computadores");
-        if (_broadcastDialog is { Active: true }) ending.Add("a transmissão da tela");
-        if (_streams.Count > 0) ending.Add("a transmissão que você está assistindo");
         return ending.Count switch
         {
             0 => "",
@@ -473,29 +458,15 @@ internal sealed class MainForm : Form
     private async Task ConnectAsync(string target)
     {
         target = target.Trim();
-        if (target.Length == 0 || !_connect.Enabled) return;
-        // Link (ou código) de uma transmissão de tela: assiste aqui dentro, em vez de no navegador.
-        try
+        if (target.Length == 0) return;
+        // Link (ou código) de uma live antiga do Ponte: as lives agora ficam no Exilados.
+        if (target.Contains("/ponte/assistir", StringComparison.OrdinalIgnoreCase) ||
+            (target.Length == 24 && target.All(char.IsAsciiLetterOrDigit) && target.Any(char.IsAsciiLetter)))
         {
-            if (StreamViewerForm.Parse(target, _config) is { } stream)
-            {
-                var watch = new StreamViewerForm(_config, stream.Server, stream.Token);
-                _streams.Add(watch);
-                watch.FormClosed += (_, _) =>
-                {
-                    _streams.Remove(watch);
-                    _ = ApplyUpdateAsync(force: false);
-                };
-                watch.Show();
-                _status.Text = "Assistindo à transmissão em outra janela.";
-                return;
-            }
-        }
-        catch (PonteException ex)
-        {
-            _status.Text = ex.Message;
+            _status.Text = "As lives saíram do Ponte e agora ficam no Exilados (filabox3d.com.br/exilados).";
             return;
         }
+        if (!_connect.Enabled) return;
         _connect.Enabled = false;
         var saved = _config.FindSaved(AppConfig.Target(target).Key);
         bool wanted = saved?.AutoAccess == true, wasPaired = saved?.Paired == true;
@@ -743,7 +714,7 @@ internal sealed class MainForm : Form
         string mode = Elevation.IsElevated ? " (administrador)" : "";
         var tray = new NotifyIcon
         {
-            Icon = Ui.MakeIcon(), ContextMenuStrip = menu, Visible = true,
+            Icon = Ui.MakeIcon(SystemInformation.SmallIconSize), ContextMenuStrip = menu, Visible = true,
             Text = $"Ponte {Updater.Current}{mode} · ID {Security.FormatId(_config.Id)}",
         };
         tray.MouseClick += (_, e) => { if (e.Button == MouseButtons.Left) ShowFromTray(); };
@@ -866,7 +837,6 @@ internal sealed class MainForm : Form
         _presenceTimer.Dispose();
         if (IsHandleCreated) Native.RemoveClipboardFormatListener(Handle);
         foreach (var viewer in _viewers.ToArray()) viewer.Close();
-        foreach (var watch in _streams.ToArray()) watch.Close();
         _indicator?.Finish();
         _host.Dispose();
         base.OnFormClosed(e);

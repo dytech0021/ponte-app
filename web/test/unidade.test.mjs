@@ -4,7 +4,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
   idFromSpki, formatId, parseTarget, passwordProof, pairingMessage, parseFrame, parsePointer, versionAtLeast,
-  toBase64, fromBase64, newIdentity, PonteError,
+  toBase64, fromBase64, newIdentity, PonteError, decodeAudio,
 } from '../ponte.js';
 
 const enc = new TextEncoder();
@@ -47,6 +47,28 @@ test('quadro de imagem e ponteiro', () => {
   const pointer = parsePointer(Uint8Array.from([1, ...u16(3), ...u16(4), 0x89, 0x50]));
   assert.deepEqual([pointer.hotX, pointer.hotY, pointer.png.length], [3, 4, 2]);
   assert.equal(parsePointer(Uint8Array.from([0, 0, 0, 0, 0, 1])), null);
+});
+
+test('som comprimido confere com o vetor de referência do Android', () => {
+  const bytes = (h) => Uint8Array.from(Buffer.from(h, 'hex'));
+  const sound = decodeAudio(bytes('020280BB0000000000000000000000F7F7F7F7F7777F7F7FD588'));
+  assert.deepEqual([sound.rate, sound.channels], [48000, 2]);
+  assert.deepEqual(Array.from(sound.samples),
+    [0, 0, 11, -11, 41, -41, 104, -104, 240, -240, 533, -533, 1164, 98, -193, 1455, -3103, 4365, -9339, 10601, 467, 795, -838, -510]);
+  // Um pedaço do meio de uma sessão: o estado de cada canal vem na mensagem, e não parte do zero.
+  const middle = decodeAudio(bytes('020244AC00002EFB280029094D008784'));
+  assert.equal(middle.rate, 44100);
+  assert.deepEqual(Array.from(middle.samples), [-603, 910, 211, -395]);
+});
+
+test('som sem compressão e mensagens que não servem', () => {
+  const bytes = (h) => Uint8Array.from(Buffer.from(h, 'hex'));
+  assert.deepEqual(Array.from(decodeAudio(bytes('010280BB0000' + '0100' + 'FEFF' + 'FF7F' + '0080')).samples), [1, -2, 32767, -32768]);
+  assert.equal(decodeAudio(bytes('010280BB0000' + '0100' + 'FEFF' + 'FF')).samples.length, 2);
+  assert.equal(decodeAudio(bytes('070280BB00000100FEFF')), null);
+  assert.equal(decodeAudio(bytes('010200000000' + '0100FEFF')), null);
+  assert.equal(decodeAudio(bytes('0102')), null);
+  assert.equal(decodeAudio(bytes('020180BB0000000000000000000000F7')), null);
 });
 
 test('versão e base64', () => {

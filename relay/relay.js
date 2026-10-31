@@ -10,8 +10,6 @@
 //       PONTE_UPDATE_DIR=pasta        arquivos de atualização Windows e Android e o componente de vídeo (padrão: ./atualizacao)
 //       PONTE_WS_PORT=porta           também atende o Ponte no navegador, por WebSocket, nessa porta
 //       PONTE_WS_BIND=endereço        onde a porta do WebSocket escuta (padrão 127.0.0.1: atrás do nginx, que faz o HTTPS)
-//       PONTE_AUTH_PORT=porta         responde ao servidor de mídia (MediaMTX) quem pode transmitir e assistir (só 127.0.0.1)
-//       PONTE_MEDIAMTX_API=url        API do MediaMTX, para contar quem está assistindo (padrão http://127.0.0.1:9997)
 // Sem dependências: só o Node.js.
 'use strict';
 
@@ -39,13 +37,9 @@ const WS_PORT = parseInt(process.env.PONTE_WS_PORT || '0', 10);
 const WS_BIND = process.env.PONTE_WS_BIND || '127.0.0.1';
 const WS_MAX_MESSAGE = 1024 * 1024;   // o navegador só manda mouse, teclas e texto: mensagens pequenas
 const WS_PING_MS = 25000;             // mantém a conexão viva no nginx e nas redes móveis
-const AUTH_PORT = parseInt(process.env.PONTE_AUTH_PORT || '0', 10);
-const MEDIAMTX_API = process.env.PONTE_MEDIAMTX_API || 'http://127.0.0.1:9997';
 
 const hosts = new Map();     // id -> conexão de controle do computador registrado
 const pending = new Map();   // token -> { viewer, takeRest, timer }
-const broadcasts = new Map(); // código da transmissão -> { id, hash, socket }
-
 // Mesmo cálculo do programa: o ID são 9 dígitos tirados do SHA-256 da chave pública.
 function idFromSpki(spki) {
   const hash = crypto.createHash('sha256').update(spki).digest();
@@ -108,131 +102,14 @@ function registerHost(socket, id) {
       socket.setTimeout(HOST_IDLE_MS, () => socket.destroy());
       socket.on('close', () => {
         if (hosts.get(id) === socket) hosts.delete(id);
-        // A transmissão vale enquanto o computador está registrado; reconectado, ele pede o mesmo código de novo.
-        for (const [token, b] of broadcasts) if (b.socket === socket) broadcasts.delete(token);
       });
       socket.write('OK\n');
       return;
     }
     if (line === 'PING') return socket.write('PONG\n');
-
-    // Transmissão de tela: o computador manda o resumo (SHA-256) da senha com que vai enviar o vídeo ao
-    // servidor de mídia e recebe o código que vai no link. Com um código já dele, retoma a mesma transmissão.
-    const start = /^TRANSMITIR ([0-9a-f]{64})(?: ([A-Za-z0-9]{24}))?$/.exec(line);
-    if (start) return socket.write(`TRANSMISSAO ${startBroadcast(socket, id, start[1], start[2])}\n`);
-    const stop = /^PARAR ([A-Za-z0-9]{24})$/.exec(line);
-    if (stop) {
-      if (broadcasts.get(stop[1])?.id === id) broadcasts.delete(stop[1]);
-      return;
-    }
-    const count = /^ESPECTADORES ([A-Za-z0-9]{24})$/.exec(line);
-    if (count && broadcasts.get(count[1])?.id === id) {
-      viewers(count[1]).then((n) => { if (!socket.destroyed) socket.write(`ESPECTADORES ${count[1]} ${n}\n`); });
-    }
+    // As lives saíram do Ponte (foram para o Exilados): pedidos de transmissão de versões antigas ficam sem
+    // resposta, e o programa antigo avisa que o servidor não tem mais transmissão de tela.
   };
-}
-
-// ---------- transmissão de tela ----------
-//
-// O vídeo vai do computador para o MediaMTX (nesta mesma máquina), que entrega a quem abrir o link. O MediaMTX
-// pergunta aqui, a cada conexão, se ela pode: transmitir só com a senha registrada pelo computador; assistir,
-// com o código do link, enquanto a transmissão existir.
-
-const TOKEN_ALPHABET = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
-
-function randomToken() {
-  let token = '';
-  while (token.length < 24) {
-    for (const byte of crypto.randomBytes(32)) {
-      // Descarta o que passaria de 248 (4 × 62), para cada letra ter a mesma chance.
-      if (byte < 248 && token.length < 24) token += TOKEN_ALPHABET[byte % 62];
-    }
-  }
-  return token;
-}
-
-function startBroadcast(socket, id, hash, wanted) {
-  const current = wanted ? broadcasts.get(wanted) : null;
-  const token = wanted && (!current || current.id === id) ? wanted : randomToken();
-  // Uma transmissão por computador: a nova substitui a anterior.
-  for (const [other, b] of broadcasts) if (b.id === id && other !== token) broadcasts.delete(other);
-  broadcasts.set(token, { id, hash, socket });
-  return token;
-}
-
-function hashMatches(password, hash) {
-  const given = crypto.createHash('sha256').update(password).digest();
-  const expected = Buffer.from(hash, 'hex');
-  return given.length === expected.length && crypto.timingSafeEqual(given, expected);
-}
-
-/** O que o MediaMTX pergunta: { user, password, ip, action, path, protocol, ... }. */
-function authorize(request) {
-  if (request.action === 'api') return ['127.0.0.1', '::1'].includes(String(request.ip));
-  const match = /^ao\/([A-Za-z0-9]{24})$/.exec(String(request.path || ''));
-  const broadcast = match && broadcasts.get(match[1]);
-  if (!broadcast) return false;
-  if (request.action === 'read') return true;
-  if (request.action === 'publish') return request.user === 'ponte' && hashMatches(String(request.password || ''), broadcast.hash);
-  return false;
-}
-
-/** Quantos estão assistindo agora, pela API do MediaMTX; -1 quando não deu para saber. */
-function viewers(token) {
-  return new Promise((resolve) => {
-    const request = http.get(`${MEDIAMTX_API}/v3/paths/get/ao/${token}`, { timeout: 3000 }, (response) => {
-      let body = '';
-      response.setEncoding('utf8');
-      response.on('data', (chunk) => { body += chunk; });
-      response.on('end', () => {
-        if (response.statusCode === 404) return resolve(0);
-        try {
-          const readers = JSON.parse(body).readers;
-          resolve(Array.isArray(readers) ? readers.length : -1);
-        } catch {
-          resolve(-1);
-        }
-      });
-    });
-    request.on('timeout', () => request.destroy());
-    request.on('error', () => resolve(-1));
-  });
-}
-
-if (AUTH_PORT > 0) {
-  const auth = http.createServer((request, response) => {
-    // O nginx pergunta, antes de entregar o APK pela página de baixar, se o código do link é de uma transmissão no
-    // ar: o aplicativo só sai para quem recebeu o link de uma transmissão, e não para qualquer um na internet.
-    if (request.method === 'GET' && request.url === '/ponte/apk') {
-      const original = String(request.headers['x-original-uri'] || '');
-      const token = new URLSearchParams(original.includes('?') ? original.slice(original.indexOf('?') + 1) : '').get('t') || '';
-      response.writeHead(/^[A-Za-z0-9]{24}$/.test(token) && broadcasts.has(token) ? 204 : 403);
-      response.end();
-      return;
-    }
-    if (request.method !== 'POST' || request.url !== '/mediamtx/auth') {
-      response.writeHead(404);
-      response.end();
-      return;
-    }
-    let body = '';
-    request.setEncoding('utf8');
-    request.on('data', (chunk) => {
-      body += chunk;
-      if (body.length > 16384) request.destroy();
-    });
-    request.on('end', () => {
-      let allowed = false;
-      try { allowed = authorize(JSON.parse(body)); } catch { allowed = false; }
-      response.writeHead(allowed ? 200 : 401);
-      response.end();
-    });
-  });
-  auth.on('error', (error) => {
-    console.error(`Não foi possível escutar a autorização da transmissão em 127.0.0.1:${AUTH_PORT}: ${error.message}`);
-    process.exit(1);
-  });
-  auth.listen(AUTH_PORT, '127.0.0.1', () => console.log(`Ponte: autorização da transmissão de tela em 127.0.0.1:${AUTH_PORT}`));
 }
 
 // "STATUS 1010": um "1" para cada ID (separados por vírgula) que está registrado aqui agora, na ordem pedida.

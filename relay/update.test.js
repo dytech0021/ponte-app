@@ -159,7 +159,7 @@ async function registerHost(port, key) {
   const signature = crypto.sign('sha256', Buffer.from(nonce, 'hex'), { key: privateKey, dsaEncoding: 'ieee-p1363' });
   socket.write(`PROOF ${spki.toString('base64')} ${signature.toString('base64')}\n`);
   assert.equal(await nextLine(), 'OK');
-  return { id, socket, nextLine };
+  return { id, socket, nextLine, privateKey };
 }
 
 test('STATUS says which saved computers are online, only with the key', { timeout: 15000 }, async t => {
@@ -222,66 +222,3 @@ async function mediamtxAsks(port, request) {
   });
   return response.status;
 }
-
-test('screen broadcast: code for a registered computer, publish only with its password, watch with the code', { timeout: 20000 }, async t => {
-  // Uma API do MediaMTX de mentira, com dois espectadores no caminho.
-  const api = require('node:http').createServer((request, response) => {
-    response.writeHead(200, { 'Content-Type': 'application/json' });
-    response.end(JSON.stringify({ name: request.url, readers: [{ type: 'webRTCSession' }, { type: 'hlsMuxer' }] }));
-  });
-  api.listen(0, '127.0.0.1');
-  await once(api, 'listening');
-  t.after(() => api.close());
-  const authPort = await freePort();
-  const relay = await startRelay(t, 'integration_test_key', {
-    PONTE_AUTH_PORT: String(authPort), PONTE_MEDIAMTX_API: `http://127.0.0.1:${api.address().port}`,
-  });
-  await new Promise(resolve => setTimeout(resolve, 200));
-  const host = await registerHost(relay.port, 'integration_test_key');
-  const crypto = require('node:crypto');
-  const password = 'senha-de-transmissao-do-teste';
-  const hash = crypto.createHash('sha256').update(password).digest('hex');
-
-  host.socket.write(`TRANSMITIR ${hash}\n`);
-  const [, token] = /^TRANSMISSAO ([A-Za-z0-9]{24})$/.exec(await host.nextLine()) || [];
-  assert.ok(token, 'o relay devolve um código de 24 letras e números');
-  const path = `ao/${token}`;
-
-  assert.equal(await mediamtxAsks(authPort, { action: 'publish', path, user: 'ponte', password }), 200);
-  assert.equal(await mediamtxAsks(authPort, { action: 'publish', path, user: 'ponte', password: 'errada' }), 401);
-  assert.equal(await mediamtxAsks(authPort, { action: 'publish', path, user: '', password: '' }), 401);
-  assert.equal(await mediamtxAsks(authPort, { action: 'read', path, user: '', password: '' }), 200);
-  assert.equal(await mediamtxAsks(authPort, { action: 'read', path: 'ao/AAAAAAAAAAAAAAAAAAAAAAAA', user: '', password: '' }), 401);
-  assert.equal(await mediamtxAsks(authPort, { action: 'read', path: 'outro/caminho', user: '', password: '' }), 401);
-  assert.equal(await mediamtxAsks(authPort, { action: 'playback', path, user: '', password: '' }), 401);
-  assert.equal(await mediamtxAsks(authPort, { action: 'api', ip: '127.0.0.1' }), 200);
-  assert.equal(await mediamtxAsks(authPort, { action: 'api', ip: '203.0.113.9' }), 401);
-
-  host.socket.write(`ESPECTADORES ${token}\n`);
-  assert.equal(await host.nextLine(), `ESPECTADORES ${token} 2`);
-
-  // Pedir de novo com o mesmo código (depois de reconectar) mantém o link.
-  host.socket.write(`TRANSMITIR ${hash} ${token}\n`);
-  assert.equal(await host.nextLine(), `TRANSMISSAO ${token}`);
-
-  // O APK pela página de baixar: só com o código de uma transmissão no ar.
-  const apk = async (uri) => (await fetch(`http://127.0.0.1:${authPort}/ponte/apk`, { headers: { 'X-Original-URI': uri } })).status;
-  assert.equal(await apk(`/ponte/baixar/Ponte.apk?t=${token}`), 204);
-  assert.equal(await apk('/ponte/baixar/Ponte.apk?t=AAAAAAAAAAAAAAAAAAAAAAAA'), 403);
-  assert.equal(await apk('/ponte/baixar/Ponte.apk'), 403);
-
-  // Parar tira o código do ar; quem tentar assistir depois é recusado.
-  host.socket.write(`PARAR ${token}\n`);
-  await new Promise(resolve => setTimeout(resolve, 100));
-  assert.equal(await mediamtxAsks(authPort, { action: 'read', path, user: '', password: '' }), 401);
-  assert.equal(await apk(`/ponte/baixar/Ponte.apk?t=${token}`), 403);
-
-  // Uma transmissão nova, e o computador saindo do ar: o código também deixa de valer.
-  host.socket.write(`TRANSMITIR ${hash}\n`);
-  const [, second] = /^TRANSMISSAO ([A-Za-z0-9]{24})$/.exec(await host.nextLine()) || [];
-  assert.ok(second && second !== token);
-  assert.equal(await mediamtxAsks(authPort, { action: 'read', path: `ao/${second}`, user: '', password: '' }), 200);
-  host.socket.destroy();
-  await new Promise(resolve => setTimeout(resolve, 200));
-  assert.equal(await mediamtxAsks(authPort, { action: 'read', path: `ao/${second}`, user: '', password: '' }), 401);
-});

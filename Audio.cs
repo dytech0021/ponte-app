@@ -142,18 +142,9 @@ internal sealed class AudioCapture : IDisposable
     /// <summary>Vazio enquanto a captura funciona; senão, o motivo de não haver som.</summary>
     public string Problem { get; private set; } = "iniciando";
 
-    // Transmissão de tela: o som vai bruto (16 bits, dois canais, 48 kHz), sem pausar no silêncio.
-    private readonly Action<short[]>? _raw;
-
-    public AudioCapture(Action<byte[]> deliver) : this(deliver, null) { }
-
-    /// <summary>Entrega o som sem compressão e sem cortar os silêncios, em pedaços de 20 ms.</summary>
-    public AudioCapture(Action<short[]> raw) : this(null, raw) { }
-
-    private AudioCapture(Action<byte[]>? deliver, Action<short[]>? raw)
+    public AudioCapture(Action<byte[]> deliver)
     {
-        _deliver = deliver ?? (_ => { });
-        _raw = raw;
+        _deliver = deliver;
         _thread = new Thread(Run) { IsBackground = true, Name = "ponte-som" };
         _thread.Start();
     }
@@ -312,14 +303,6 @@ internal sealed class AudioCapture : IDisposable
     private void Deliver(int chunk, int rate)
     {
         var samples = _pending.AsSpan(0, chunk);
-        if (_raw is not null)
-        {
-            // A transmissão quer 48 kHz; outra taxa (saída de som que o Windows não converte) fica de fora.
-            if (rate == AudioCodec.Rate) _raw(samples.ToArray());
-            _pending.AsSpan(chunk, _count - chunk).CopyTo(_pending);
-            _count -= chunk;
-            return;
-        }
         bool quiet = true;
         foreach (short s in samples)
         {

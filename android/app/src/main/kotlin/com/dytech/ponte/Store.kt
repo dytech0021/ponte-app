@@ -70,11 +70,6 @@ class Store(context: Context) {
         get() = prefs.getBoolean("telaCheia", false)
         set(value) = prefs.edit().putBoolean("telaCheia", value).apply()
 
-    /** A transmissão de tela abre sem as barras do Android (a última escolha na tela de assistir). */
-    var watchFullScreen: Boolean
-        get() = prefs.getBoolean("assistirTelaCheia", true)
-        set(value) = prefs.edit().putBoolean("assistirTelaCheia", value).apply()
-
     /** Ouvir o som do computador durante a sessão. */
     var sound: Boolean
         get() = prefs.getBoolean("som", true)

@@ -17,9 +17,8 @@ if ($chaveSsh -like '*filabox3d_deploy_ed25519' -and (Test-Path $hostsDaChave)) 
 }
 $pastaRemota = '/var/www/ponte-web'
 $endereco = 'https://filabox3d.com.br/ponte/'
-$arquivos = 'index.html', 'app.js', 'app.css', 'ponte.js', 'manifest.webmanifest', 'icone-180.png', 'icone-192.png', 'icone-512.png',
-    'assistir/index.html', 'assistir/assistir.js', 'assistir/assistir.css', 'assetlinks.json',
-    'baixar/index.html', 'baixar/baixar.js'
+$arquivos = 'index.html', 'app.js', 'app.css', 'ponte.js', 'conta.js', 'manifest.webmanifest', 'icone-180.png', 'icone-192.png', 'icone-512.png',
+    'assetlinks.json'
 $temp = Join-Path ([IO.Path]::GetTempPath()) ('ponte-web-' + [Guid]::NewGuid().ToString('N').Substring(0, 8))
 
 function Falhar($mensagem) {
@@ -42,18 +41,19 @@ $versaoServidor = if ($atual) { [Version]$atual } else { [Version]'0.0.0' }
 if ($versao -le $versaoServidor) { Falhar "o servidor já tem a $versaoServidor. Suba VERSION em app.js (está em $versao) antes de publicar." }
 Write-Host "Publicando o Ponte no navegador $versao (o servidor tem a $versaoServidor)."
 
-# Os testes do núcleo que não dependem de nada no ar (o teste contra um Ponte de verdade é o testar-com-o-pc.ps1).
+# Os testes do núcleo e da conta (contra um Supabase falso) que não dependem de nada no ar (o teste contra um Ponte
+# de verdade é o testar-com-o-pc.ps1).
 $node = (Get-Command node -ErrorAction SilentlyContinue).Source
 if (-not $node) { $node = Join-Path $env:LOCALAPPDATA 'Programs\nodejs\node.exe' }
 if (-not (Test-Path $node)) { Falhar 'não achei o Node.js para rodar os testes.' }
-& $node --test (Join-Path $raiz 'test\unidade.test.mjs')
+& $node --test (Join-Path $raiz 'test\unidade.test.mjs') (Join-Path $raiz 'test\conta.test.mjs')
 if ($LASTEXITCODE -ne 0) { Falhar 'os testes do núcleo falharam; nada foi publicado.' }
 foreach ($arquivo in $arquivos) { if (-not (Test-Path (Join-Path $raiz $arquivo))) { Falhar "falta web\$arquivo." } }
 
 # Tudo vai para uma pasta nova, que só então assume o lugar: ninguém abre a página pela metade.
 New-Item -ItemType Directory $temp | Out-Null
 [IO.File]::WriteAllText((Join-Path $temp 'versao.txt'), "$versao`n")
-Remoto "rm -rf $pastaRemota.novo && mkdir -p $pastaRemota.novo/assistir $pastaRemota.novo/baixar" | Out-Null
+Remoto "rm -rf $pastaRemota.novo && mkdir -p $pastaRemota.novo" | Out-Null
 foreach ($arquivo in $arquivos) {
     & scp @acessoSsh -q (Join-Path $raiz $arquivo) "${servidor}:$pastaRemota.novo/$arquivo"
     if ($LASTEXITCODE -ne 0) { Falhar "o envio de $arquivo falhou." }

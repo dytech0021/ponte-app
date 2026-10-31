@@ -24,7 +24,7 @@ internal static partial class SelfTest
         return port;
     }
 
-    public static async Task<int> RunAsync(string dir, string? relay, bool onlyVideo = false, bool onlyAccount = false, bool onlyBroadcast = false)
+    public static async Task<int> RunAsync(string dir, string? relay, bool onlyVideo = false, bool onlyAccount = false)
     {
         Directory.CreateDirectory(dir);
         SessionLog.Folder = dir;
@@ -45,7 +45,6 @@ internal static partial class SelfTest
         try
         {
             if (onlyAccount) await CheckAccountAsync(dir, Check);
-            else if (onlyBroadcast) await CheckBroadcastOnlyAsync(dir, relay, Check);
             else await RunChecksAsync(dir, relay, Check, onlyVideo);
         }
         catch (Exception ex)
@@ -130,7 +129,6 @@ internal static partial class SelfTest
         check("QR Code igual ao da implementação de referência", qrWrong.Count == 0, string.Join("; ", qrWrong));
         check("arquivo que não é APK não passa pela conferência de assinatura", AndroidApp.SignerDigest(RandomNumberGenerator.GetBytes(4096)) is null);
         if (!onlyVideo) await CheckAccountAsync(dir, check);
-        if (relay is not null && !onlyVideo) await CheckBroadcastAsync(host, hostConfig, check);
         if (relay is not null) await CheckAndroidAppAsync(viewerConfig, check);
 
         Task<ViewerSession> Connect(string? typed) => ViewerSession.ConnectAsync(viewerConfig, target,

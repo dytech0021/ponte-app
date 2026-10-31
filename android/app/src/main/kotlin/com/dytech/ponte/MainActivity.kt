@@ -26,7 +26,6 @@ import android.widget.TextView
 import android.widget.Toast
 import ponte.core.Crypto
 import ponte.core.Presence
-import ponte.core.StreamLink
 import ponte.core.Target
 import java.text.SimpleDateFormat
 import java.util.Date
@@ -56,7 +55,7 @@ class MainActivity : Activity() {
 
         findViewById<View>(R.id.conectar).setOnClickListener { connect(address.text.toString()) }
         findViewById<View>(R.id.salvar).setOnClickListener { editComputer(address.text.toString().trim(), "", true, isNew = true) }
-        findViewById<View>(R.id.assistir).setOnClickListener { startActivity(Intent(this, LerQrActivity::class.java)) }
+        findViewById<View>(R.id.exilados).setOnClickListener { abrirExilados() }
         findViewById<View>(R.id.menu).setOnClickListener { showMenu(it) }
         findViewById<View>(R.id.conta).setOnClickListener { accountClicked() }
         address.setOnEditorActionListener { _, action, _ ->
@@ -116,15 +115,10 @@ class MainActivity : Activity() {
             address.requestFocus()
             return
         }
-        // Link (ou código) de uma transmissão de tela: assiste aqui dentro, em vez de no navegador.
-        val stream = try {
-            StreamLink.parse(target, store.relayServer)
-        } catch (e: IllegalArgumentException) {
-            Toast.makeText(this, e.message, Toast.LENGTH_LONG).show()
-            return
-        }
-        if (stream != null) {
-            startActivity(Intent(this, AssistirActivity::class.java).putExtra(AssistirActivity.EXTRA_URL, stream.url))
+        // Link (ou código) de uma live antiga do Ponte: as lives agora ficam no Exilados.
+        if (target.contains("/ponte/assistir", ignoreCase = true) || LIVE_ANTIGA.matches(target)) {
+            Toast.makeText(this, "As lives saíram do Ponte e agora ficam no Exilados.", Toast.LENGTH_LONG).show()
+            abrirExilados()
             return
         }
         startActivity(Intent(this, SessionActivity::class.java).putExtra(SessionActivity.EXTRA_TARGET, target))
@@ -209,9 +203,21 @@ class MainActivity : Activity() {
         return row
     }
 
+    /** As lives e os amigos saíram do Ponte e agora ficam no Exilados, no navegador. */
+    private fun abrirExilados() {
+        try {
+            startActivity(Intent(Intent.ACTION_VIEW, android.net.Uri.parse("https://filabox3d.com.br/exilados/")))
+        } catch (e: android.content.ActivityNotFoundException) {
+            Toast.makeText(this, "Abra filabox3d.com.br/exilados no navegador.", Toast.LENGTH_LONG).show()
+        }
+    }
+
     // ---------- online / offline ----------
 
     companion object {
+        /** Código de uma live antiga do Ponte (24 letras e números): as lives agora ficam no Exilados. */
+        private val LIVE_ANTIGA = Regex("^(?=.*[A-Za-z])[A-Za-z0-9]{24}$")
+
         /** Aberta de novo pela atualização: avisa que já está na versão nova. */
         const val EXTRA_UPDATED = "atualizado"
 
@@ -550,7 +556,7 @@ class MainActivity : Activity() {
                     "Endereço deste aparelho: $id\n" +
                     "É com esse número e o nome \"${store.deviceName}\" que ele aparece na lista de computadores autorizados do Ponte no computador.\n\n" +
                     "Este aplicativo acessa computadores que tenham o Ponte aberto. Ele não permite que o celular seja acessado.\n\n" +
-                    "O QR Code das transmissões é lido com a biblioteca ZXing (licença Apache 2.0, apache.org/licenses/LICENSE-2.0)."
+                    "As lives e os amigos ficam no Exilados: filabox3d.com.br/exilados"
             )
             .setPositiveButton("Fechar", null)
             .show()

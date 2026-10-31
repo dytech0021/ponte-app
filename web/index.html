@@ -24,9 +24,16 @@
       <div class="topo-textos">
         <h1>Ponte</h1>
         <p id="versao" class="fraco"></p>
+        <!-- Conta opcional, a mesma do FilaBox: a lista de computadores aparece em qualquer aparelho em que ela entrar. -->
+        <button id="conta" class="link conta" type="button">Entrar na conta</button>
       </div>
       <button id="menu" class="icone" type="button" aria-label="Menu">⋮</button>
     </header>
+
+    <div id="atualizar" class="aviso" hidden>
+      <p id="atualizar-texto">Chegou uma versão nova do Ponte.</p>
+      <button type="button" class="link" id="atualizar-agora">Atualizar</button>
+    </div>
 
     <div id="instalar" class="aviso" hidden>
       <p>Para usar como aplicativo: toque em <strong>Compartilhar</strong> <span aria-hidden="true">(□↑)</span> e depois em
@@ -45,6 +52,9 @@
       </div>
     </form>
 
+    <!-- As lives e os amigos saíram do Ponte e agora ficam no Exilados (abre fora do Ponte). -->
+    <button type="button" id="exilados" class="secundario largo">Lives no Exilados</button>
+
     <h2>Computadores salvos</h2>
     <p id="salvos-vazio" class="fraco vazio">Nenhum computador salvo ainda. Digite o ID e toque em Salvar.</p>
     <ul id="salvos" class="lista"></ul>
@@ -52,6 +62,7 @@
     <h2 id="recentes-titulo" hidden>Conexões recentes</h2>
     <ul id="recentes" class="lista"></ul>
   </main>
+  <p id="inicio-aviso" class="toast fixo" role="status" hidden></p>
 
   <section id="sessao" hidden>
     <canvas id="tela" aria-label="Tela do computador"></canvas>
@@ -60,6 +71,8 @@
     <!-- Fica fora da vista: é ele que abre o teclado do celular e recebe o que é digitado. -->
     <textarea id="digitar" aria-label="Teclado" autocapitalize="off" autocomplete="off" autocorrect="off" spellcheck="false"></textarea>
     <div id="teclas" class="teclas" hidden></div>
+    <!-- Na tela cheia, a barra some; este botão, num canto, traz os comandos de volta. -->
+    <button type="button" id="b-comandos" class="comandos" hidden>Comandos</button>
     <nav class="barra">
       <button type="button" id="b-teclado">Teclado</button>
       <button type="button" id="b-teclas">Teclas</button>

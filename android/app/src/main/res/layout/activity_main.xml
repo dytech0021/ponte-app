@@ -120,18 +120,16 @@
             </LinearLayout>
         </LinearLayout>
 
-        <!-- Lê o QR Code da janela "Transmitir a tela" do computador e assiste aqui. -->
+        <!-- As lives e os amigos saíram do Ponte e agora ficam no Exilados (abre no navegador). -->
         <Button
-            android:id="@+id/assistir"
+            android:id="@+id/exilados"
             style="@style/BotaoSecundario"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:layout_marginTop="12dp"
-            android:drawableStart="@drawable/qr"
-            android:drawablePadding="10dp"
             android:paddingStart="16dp"
             android:paddingEnd="16dp"
-            android:text="Assistir transmissão" />
+            android:text="Lives no Exilados" />
 
         <TextView
             style="@style/TituloDeSecao"

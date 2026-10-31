@@ -13,6 +13,8 @@ internal sealed class VideoProcess : IDisposable
     public Process Process { get; }
     private readonly Task _errors;
     private string _error = "";
+    private readonly ConcurrentQueue<string> _diagnostic = new();
+    internal string Diagnostic => string.Join(Environment.NewLine, _diagnostic);
     /// <summary>Última linha de erro que o FFmpeg escreveu.</summary>
     public string Error => _error;
 
@@ -33,7 +35,12 @@ internal sealed class VideoProcess : IDisposable
             try
             {
                 while (await Process.StandardError.ReadLineAsync() is { } line)
-                    if (line.Trim().Length > 0) _error = line.Length > 300 ? line[..300] : line;
+                    if (line.Trim().Length > 0)
+                    {
+                        _error = line.Length > 300 ? line[..300] : line;
+                        _diagnostic.Enqueue(_error);
+                        while (_diagnostic.Count > 16) _diagnostic.TryDequeue(out _);
+                    }
             }
             catch (Exception ex) when (ex is IOException or InvalidOperationException or ObjectDisposedException) { }
         });

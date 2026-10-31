@@ -134,6 +134,10 @@ no servidor, ajuste esse caminho na unidade do serviço.
 | `PONTE_PORT` | 7412 | Porta, quando não vem como argumento. |
 | `PONTE_BIND` | `0.0.0.0` | Endereço de escuta. |
 | `PONTE_UPDATE_DIR` | `atualizacao`, ao lado do `relay.js` | Pasta dos arquivos de atualização. |
+| `PONTE_WS_PORT` | 0 (desligado) | Porta do WebSocket do Ponte no navegador (atrás do nginx). |
+
+O MediaMTX, que servia as lives do Ponte até a 1.10.1, agora é do Exilados: a configuração e a autorização dele
+ficam no repositório `dytech0021/exilados` (pasta `servidor/`).
 
 ### 3.3 Comandos do dia a dia
 
@@ -279,5 +283,6 @@ a chave de assinatura (seção 4.1).
 | Tela de login, tela de bloqueio, avisos do UAC, Ctrl+Alt+Del | Fora do alcance sem um serviço do Windows. |
 | Início com o Windows | Disponível desde a 1.4.0: abre minimizado após o login; pode ser desligado em Configurações. |
 | Cópia de segurança da chave de assinatura | Não existe forma de levá-la para outra máquina. |
+| Lives e amigos | Saíram do Ponte na 1.11.0 e agora ficam no Exilados (veja `docs/SEM-LIVES-1.11.0.md`). O Ponte 1.11.0 do Windows precisa ser publicado no PC que tem a chave de atualização. |
 | Envio de arquivo para o aplicativo do celular | O aplicativo não grava arquivos; por isso o botão de enviar some quando quem acessa é um celular. |
 | Histórico de acessos | Não há arquivo de registro. |

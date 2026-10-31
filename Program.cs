@@ -14,11 +14,10 @@ internal static class Program
     ///   --elevar                          abre como administrador mesmo que a configuração diga que não
     ///   --inicio                          abertura feita pelo Windows na inicialização: minimizado e sem pedir administrador
     ///   --autoteste pasta [--relay h:p]   testa os dois lados nesta máquina e grava o resultado na pasta
-    ///                                     (--so-video, --so-conta ou --so-transmissao: só essa parte)
+    ///                                     (--so-video ou --so-conta: só essa parte)
     ///   --captura-ui pasta                grava a imagem da janela principal e das secundárias e sai
     ///   --demo pasta                      abre uma sessão com esta própria máquina, grava a imagem e sai
     ///   --atualizar-agora log [--relay h:p]   procura, confere e instala a atualização sem abrir janela
-    ///   --assistir link [--gravar-imagem arquivo]   só a janela de assistir a uma transmissão de tela
     /// De quem publica: --gerar-chave-atualizacao chave fonte.cs | --assinar-atualizacao exe chave manifesto | --empacotar-video ffmpeg.exe pacote.br
     /// </summary>
     [STAThread]
@@ -94,11 +93,10 @@ internal static class Program
         if (Arg(args, "--atualizar-agora") is { } updateLog) return UpdateNow(updateLog, args);
         if (Arg(args, "--janela-teste") is { } seconds) return TestWindow(int.TryParse(seconds, out int s) ? Math.Clamp(s, 5, 300) : 30);
         if (Arg(args, "--autoteste") is { } testDir)
-            return Task.Run(() => SelfTest.RunAsync(testDir, Arg(args, "--relay"), args.Contains("--so-video"), args.Contains("--so-conta"), args.Contains("--so-transmissao"))).GetAwaiter().GetResult();
+            return Task.Run(() => SelfTest.RunAsync(testDir, Arg(args, "--relay"), args.Contains("--so-video"), args.Contains("--so-conta"))).GetAwaiter().GetResult();
         if (Arg(args, "--demo") is { } demoDir) return Demo(demoDir, args);
 
         var config = AppConfig.Load(Arg(args, "--perfil"));
-        if (Arg(args, "--assistir") is { } watch) return Watch(config, watch, Arg(args, "--gravar-imagem"));
         // Um perfil à parte (testes) anota as sessões na pasta dele, sem misturar com as do Ponte de uso.
         if (Arg(args, "--perfil") is not null) SessionLog.Folder = config.Dir;
 
@@ -138,7 +136,6 @@ internal static class Program
                     ("configuracoes.png", new SettingsDialog(config, false)),
                     ("celular.png", new AndroidAppDialog(config)),
                     ("conta.png", new AccountDialog()),
-                    ("transmissao.png", new BroadcastDialog(host, config)),
                     ("video.png", new VideoSettingsDialog(new VideoOptions(60, "h264"), "H.264 pela GPU (AMD) · 60 FPS alvo · 4:2:0 · captura DXGI")),
                     ("sessao-ativa.png", new SessionIndicator(new HostSession(new Channel(Stream.Null),
                         new HelloMsg("NOTEBOOK-CASA", "maria", Updater.Current.ToString(), null, Caps.Files), "pelo servidor de retransmissão", "", true, config)) { WindowState = FormWindowState.Normal }),
@@ -183,37 +180,6 @@ internal static class Program
 
     // Janela que fica na frente por alguns segundos. Aberta com --elevar, reproduz a situação de um programa
     // de administrador em primeiro plano, que é quando o Windows bloqueia a entrada de um programa comum.
-    // Só a janela de assistir a uma transmissão, sem o resto do Ponte. Com arquivo, grava a imagem dela depois de a
-    // transmissão aparecer (ou de 20 s) e fecha: é assim que a verificação confere o que se vê.
-    private static int Watch(AppConfig config, string link, string? image)
-    {
-        (string Server, string Token)? stream;
-        try { stream = StreamViewerForm.Parse(link, config); }
-        catch (PonteException ex)
-        {
-            if (image is null) MessageBox.Show(ex.Message, "Ponte", MessageBoxButtons.OK, MessageBoxIcon.Information);
-            return 1;
-        }
-        if (stream is not { } s)
-        {
-            if (image is null) MessageBox.Show("Esse não é um link de transmissão do Ponte.", "Ponte", MessageBoxButtons.OK, MessageBoxIcon.Information);
-            return 1;
-        }
-        using var form = new StreamViewerForm(config, s.Server, s.Token);
-        if (image is not null)
-        {
-            form.Shown += async (_, _) =>
-            {
-                for (int i = 0; i < 40 && !form.Watching; i++) await Task.Delay(500);
-                await Task.Delay(3000);
-                Ui.SaveImage(form, image);
-                form.Close();
-            };
-        }
-        Application.Run(form);
-        return form.Watching ? 0 : 2;
-    }
-
     private static int TestWindow(int seconds)
     {
         using var form = new Form
