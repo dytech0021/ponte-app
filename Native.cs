@@ -58,6 +58,10 @@ internal static class Native
         public uint cbSize, dwTime;
     }
 
+    /// <summary>Estado de uma tecla agora (bit alto: apertada), para saber se o Ctrl está junto.</summary>
+    [DllImport("user32.dll")]
+    public static extern short GetKeyState(int virtualKey);
+
     [DllImport("user32.dll")]
     [return: MarshalAs(UnmanagedType.Bool)]
     private static extern bool GetLastInputInfo(ref LASTINPUTINFO info);

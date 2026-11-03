@@ -56,6 +56,7 @@ class MainActivity : Activity() {
         findViewById<View>(R.id.conectar).setOnClickListener { connect(address.text.toString()) }
         findViewById<View>(R.id.salvar).setOnClickListener { editComputer(address.text.toString().trim(), "", true, isNew = true) }
         findViewById<View>(R.id.exilados).setOnClickListener { abrirExilados() }
+        findViewById<View>(R.id.acesso).setOnClickListener { startActivity(Intent(this, AcessoActivity::class.java)) }
         findViewById<View>(R.id.menu).setOnClickListener { showMenu(it) }
         findViewById<View>(R.id.conta).setOnClickListener { accountClicked() }
         address.setOnEditorActionListener { _, action, _ ->

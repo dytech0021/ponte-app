@@ -178,17 +178,36 @@ internal sealed class RemoteView : Control
         {
             case Native.WM_KEYDOWN or Native.WM_SYSKEYDOWN or Native.WM_KEYUP or Native.WM_SYSKEYUP:
                 int vk = (int)msg.WParam & 0xFFFF;
+                // Num celular, o que forma letra vai como texto pronto (WM_CHAR, com acentos e o layout daqui); só as
+                // teclas de comando vão como teclas.
+                if (_session.HostIsPhone && !PhoneCommandKey(vk)) return true;
                 bool up = msg.Msg is Native.WM_KEYUP or Native.WM_SYSKEYUP;
                 bool extended = (((long)msg.LParam >> 24) & 1) != 0;
                 if (up) _keysDown.Remove(vk);
                 else _keysDown.Add(vk);
                 _ = _session.SendKeyAsync(vk, up, extended);
                 return true;
+            case Native.WM_CHAR when _session.HostIsPhone:
+                char c = (char)((int)msg.WParam & 0xFFFF);
+                if (char.IsHighSurrogate(c)) { _pendingSurrogate = c; return true; }
+                string text = _pendingSurrogate is { } high && char.IsLowSurrogate(c) ? $"{high}{c}" : c.ToString();
+                _pendingSurrogate = null;
+                if (!char.IsControl(text[0])) _ = _session.SendTextAsync(text);
+                return true;
             case Native.WM_CHAR or Native.WM_DEADCHAR or Native.WM_SYSCHAR or Native.WM_SYSDEADCHAR:
                 return true;
         }
         return base.PreProcessMessage(ref msg);
     }
+
+    private char? _pendingSurrogate;
+
+    // Teclas que um celular trata como comando: modificadoras, Enter, apagar, setas, Esc (Voltar), Windows (Início) e
+    // qualquer tecla com Ctrl (copiar, colar...). As outras viram texto pelo WM_CHAR.
+    private static bool PhoneCommandKey(int vk) =>
+        vk is 0x10 or 0x11 or 0x12 or (>= 0xA0 and <= 0xA5) or 0x1B or 0x0D or 0x08 or 0x2E or 0x09 or (>= 0x23 and <= 0x28)
+            or 0x70 or 0x5B or 0x5C or PhoneKeys.Back or PhoneKeys.Home or PhoneKeys.Recents
+        || (Native.GetKeyState(0x11) & 0x8000) != 0 && (Native.GetKeyState(0x12) & 0x8000) == 0;
 
     protected override void OnLostFocus(EventArgs e)
     {
@@ -375,7 +394,18 @@ internal sealed class ViewerForm : Form
 
         var end = new ToolStripButton("Desconectar") { DisplayStyle = ToolStripItemDisplayStyle.Text, Alignment = ToolStripItemAlignment.Right, ForeColor = Ui.Danger };
         end.Click += (_, _) => Close();
-        bar.Items.AddRange(new ToolStripItem[] { screens, _profileButton, quality, _video, keys, new ToolStripSeparator(), full, file, shot, _clipboard, _sound, end });
+        if (session.HostIsPhone)
+        {
+            // Um celular: os botões dele no lugar das combinações do Windows.
+            ToolStripButton phone(string text, int vk) =>
+                new(text, null, (_, _) => { _view.SendCombo(vk); _view.Focus(); }) { DisplayStyle = ToolStripItemDisplayStyle.Text };
+            bar.Items.AddRange(new ToolStripItem[] { phone("◀ Voltar", PhoneKeys.Back), phone("● Início", PhoneKeys.Home), phone("▮▮ Apps", PhoneKeys.Recents),
+                new ToolStripSeparator(), quality, new ToolStripSeparator(), full, shot, _clipboard, end });
+        }
+        else
+        {
+            bar.Items.AddRange(new ToolStripItem[] { screens, _profileButton, quality, _video, keys, new ToolStripSeparator(), full, file, shot, _clipboard, _sound, end });
+        }
 
         var statusBar = _statusBar = new StatusStrip { SizingGrip = false, ShowItemToolTips = true };
         statusBar.Items.AddRange(new ToolStripItem[] { _status, _stats });

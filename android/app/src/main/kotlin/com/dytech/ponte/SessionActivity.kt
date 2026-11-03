@@ -27,6 +27,7 @@ import kotlin.concurrent.thread
 import ponte.core.ClientConfig
 import ponte.core.ConnectCallbacks
 import ponte.core.Frame
+import ponte.core.PhoneKeys
 import ponte.core.PointerShape
 import ponte.core.PonteClient
 import ponte.core.PonteException
@@ -159,7 +160,10 @@ class SessionActivity : Activity() {
         }
         store.recordConnection(target, connected.hostName, connected.fingerprint, connected.paired)
         session = connected
-        ui.post { onConnected(connected, saved?.paired == true, saved?.autoAccess == true) }
+        ui.post {
+            if (connected.isPhone) buildBar()
+            onConnected(connected, saved?.paired == true, saved?.autoAccess == true)
+        }
 
         connected.run(object : SessionListener {
             private var first = true
@@ -415,6 +419,12 @@ class SessionActivity : Activity() {
             return
         }
         chip(bar, "Teclado") { toggleKeyboard() }
+        // Do outro lado está um celular (1.14.0): os botões dele vão como teclas que ele entende.
+        if (session?.isPhone == true) {
+            chip(bar, "Voltar") { keyboard.tap(PhoneKeys.BACK) }
+            chip(bar, "Início") { keyboard.tap(PhoneKeys.HOME) }
+            chip(bar, "Apps") { keyboard.tap(PhoneKeys.RECENTS) }
+        }
         modeButton = chip(bar, "") { toggleMode() }
         paintMode()
         chip(bar, "Teclas") { toggleKeys() }

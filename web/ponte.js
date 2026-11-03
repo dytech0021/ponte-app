@@ -18,7 +18,9 @@ export const Msg = {
 export const MouseAction = { MOVE: 0, LEFT_DOWN: 1, LEFT_UP: 2, RIGHT_DOWN: 3, RIGHT_UP: 4, MIDDLE_DOWN: 5, MIDDLE_UP: 6, WHEEL: 7 };
 
 /** O que o navegador sabe fazer além do básico: desenhar o ponteiro que vem do computador. */
-export const Caps = { FILES: 1, CURSOR: 2, AUDIO: 4 };
+export const Caps = { FILES: 1, CURSOR: 2, AUDIO: 4, PHONE: 16 };
+/** Teclas que um celular acessado (Ponte para Android 1.14.0) entende como Voltar, Início e Apps recentes. */
+export const PhoneKeys = { BACK: 0xA6, HOME: 0xAC, RECENTS: 0x5D };
 
 // ---------- utilidades ----------
 
@@ -425,6 +427,8 @@ export class Session {
     this.acceptsText = versionAtLeast(this.hostVersion, 1, 3);
     /** O computador transmite o som dele quando pedido (1.5.0 em diante, e se o dono não desligou). */
     this.hasSound = (this.hostCaps & Caps.AUDIO) !== 0;
+    /** Do outro lado está um celular (1.14.0): há Voltar, Início e Apps. */
+    this.isPhone = (this.hostCaps & Caps.PHONE) !== 0;
   }
 
   /** Lê até a sessão acabar. listener: onFrame, onPointer, onPointerPosition, onSound, onClipboard, onNotice, onClosed. */

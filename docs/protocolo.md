@@ -210,6 +210,14 @@ Bits de `Caps`, os mesmos no `Hello` e no `AuthResult`:
 | 0 | 1 | Grava os arquivos que chegam. | Não usado. |
 | 1 | 2 | Desenha o ponteiro que chega em `Cursor`. | Envia `Cursor`. |
 | 2 | 4 | Toca o som que chega em `Audio`. | Transmite o som quando pedido em `Settings`. |
+| 3 | 8 | Decodifica vídeo (`VideoStart`/`VideoData`). | Envia vídeo quando pedido. |
+| 4 | 16 | Não usado. | *1.14.0:* o controlado é um celular Android. Quem acessa manda texto pronto (`Text`) e oferece os botões do celular. |
+
+Teclas que um celular controlado entende como os botões dele (mensagem `Key`): `0xA6` (VK_BROWSER_BACK) = Voltar,
+`0xAC` (VK_BROWSER_HOME) = Início, `0x5D` (VK_APPS) = Apps recentes. Ele também trata Esc como Voltar, a tecla do
+Windows como Início, o botão direito do mouse como Voltar e o do meio como Início, e transforma as teclas de letras
+em texto pelo teclado americano (para visualizadores anteriores à 1.14.0). O celular acessado não envia `Cursor`
+nem `Audio`, e responde a arquivos com um `Notice`.
 
 Sem `Caps` no `Hello` (visualizador anterior à 1.5.0), o controlado não envia `Cursor` e trata o
 visualizador como capaz de receber arquivos, a não ser que o `User` seja `Android`: o aplicativo do

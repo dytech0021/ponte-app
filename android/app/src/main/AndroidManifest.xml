@@ -2,8 +2,18 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
 
     <!-- A rede, para acessar os computadores, e o pedido de instalação, para o aplicativo se atualizar. O aplicativo
-         não é acessado e não lê arquivos do aparelho. -->
+         não lê arquivos do aparelho. -->
     <uses-permission android:name="android.permission.INTERNET" />
+    <!-- Acesso a este celular (1.14.0): ficar acessível pelo ID (serviço em primeiro plano), gravar a tela durante a
+         sessão, voltar a ficar acessível quando o celular liga, manter o celular acordado e perceber a troca de rede. -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PROJECTION" />
+    <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
+    <uses-permission android:name="android.permission.WAKE_LOCK" />
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+    <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
+    <uses-permission android:name="android.permission.USE_FULL_SCREEN_INTENT" />
     <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
     <!-- Do Android 12 em diante, o Ponte se atualiza sem a tela de confirmação do instalador (só a dele mesmo). -->
     <uses-permission android:name="android.permission.UPDATE_PACKAGES_WITHOUT_USER_ACTION" />
@@ -48,6 +58,64 @@
             android:name=".AtualizadoReceiver"
             android:exported="false">
             <intent-filter>
+                <action android:name="android.intent.action.MY_PACKAGE_REPLACED" />
+            </intent-filter>
+        </receiver>
+
+        <!-- Acesso a este celular: a tela de configuração, o pedido "Fulano quer acessar" e a autorização da gravação. -->
+        <activity
+            android:name=".AcessoActivity"
+            android:exported="false" />
+
+        <activity
+            android:name=".PedidoActivity"
+            android:excludeFromRecents="true"
+            android:exported="false"
+            android:launchMode="singleTop"
+            android:taskAffinity="com.dytech.ponte.pedido"
+            android:theme="@android:style/Theme.Translucent.NoTitleBar" />
+
+        <activity
+            android:name=".ProjecaoActivity"
+            android:excludeFromRecents="true"
+            android:exported="false"
+            android:taskAffinity="com.dytech.ponte.gravacao"
+            android:theme="@android:style/Theme.Translucent.NoTitleBar" />
+
+        <!-- Mantém este celular acessível pelo ID; durante a sessão, também grava a tela. -->
+        <service
+            android:name=".AcessoService"
+            android:exported="false"
+            android:foregroundServiceType="specialUse|mediaProjection">
+            <property
+                android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+                android:value="Acesso remoto: manter este celular acessível pelo ID para quem o dono autorizou" />
+        </service>
+
+        <!-- O controle por quem acessa (toques, Voltar, Início, texto), ligado pela pessoa em Acessibilidade. -->
+        <service
+            android:name=".ControleService"
+            android:exported="true"
+            android:label="@string/controle_nome"
+            android:permission="android.permission.BIND_ACCESSIBILITY_SERVICE">
+            <intent-filter>
+                <action android:name="android.accessibilityservice.AccessibilityService" />
+            </intent-filter>
+            <meta-data
+                android:name="android.accessibilityservice"
+                android:resource="@xml/controle" />
+        </service>
+
+        <receiver
+            android:name=".PedidoReceiver"
+            android:exported="false" />
+
+        <!-- Volta a deixar o celular acessível quando ele liga ou quando o aplicativo é atualizado. -->
+        <receiver
+            android:name=".InicioReceiver"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.intent.action.BOOT_COMPLETED" />
                 <action android:name="android.intent.action.MY_PACKAGE_REPLACED" />
             </intent-filter>
         </receiver>

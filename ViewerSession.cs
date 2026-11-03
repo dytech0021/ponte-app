@@ -34,6 +34,8 @@ internal sealed class ViewerSession : IAsyncDisposable
     public string HostVersion { get; }
     /// <summary>O outro computador transmite o som dele quando pedido (1.4.0 em diante, e se o dono não desligou).</summary>
     public bool HostHasSound { get; }
+    /// <summary>Do outro lado está um celular (Ponte para Android 1.14.0 em diante).</summary>
+    public bool HostIsPhone { get; }
 
     /// <summary>Imagem atual da tela remota. Quem lê ou desenha precisa segurar <see cref="CanvasLock"/>.</summary>
     public Bitmap? Canvas { get; private set; }
@@ -66,6 +68,7 @@ internal sealed class ViewerSession : IAsyncDisposable
         Target = target;
         HostHasSound = (result.Caps & Caps.Audio) != 0;
         HostHasVideo = (result.Caps & Caps.Video) != 0;
+        HostIsPhone = (result.Caps & Caps.Phone) != 0;
         HostName = result.HostName;
         Screens = result.Screens;
         Fingerprint = fingerprint;

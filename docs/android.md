@@ -4,7 +4,8 @@ O aplicativo permite acessar, a partir do celular, um computador que esteja com 
 Este documento vale para a versão 1.6.4 do aplicativo. A primeira parte é para quem usa; a segunda,
 para quem mantém o código.
 
-O aplicativo só **acessa** computadores. Ele não permite que o celular seja acessado.
+Desde a 1.14.0 o celular também pode **ser acessado** (por um computador, outro celular ou o Ponte no
+navegador): veja a seção 8.
 
 ## 1. Requisitos
 
@@ -153,6 +154,70 @@ Nas configurações, escolha a aparência automática (acompanha o Android), cla
 | Atualização | Consulta e download automáticos ao abrir; a instalação pede a confirmação do Android. |
 | Testes | A 1.0.0 funcionou num aparelho real, conforme relato do usuário. Os recursos novos e o fluxo de instalação da 1.5.0 ainda precisam de validação no aparelho. |
 
+## 8. Acesso a este celular (1.14.0)
+
+Em **Acesso a este celular** (botão na tela inicial), ligue **Permitir acesso a este celular**. O celular ganha
+um ID próprio, de 9 dígitos, e fica no ar como um computador com o Ponte aberto: uma notificação fixa mostra o ID
+e, durante uma sessão, quem está acessando, com o botão **Encerrar**.
+
+Quem acessa digita esse ID no Ponte do Windows, no aplicativo de outro celular ou no Ponte do navegador. Depois:
+
+- **Sem senha:** aparece no celular "Fulano quer acessar este celular", com Permitir, Recusar e "Sempre permitir
+  este aparelho". Sem resposta em 30 segundos, o pedido é recusado.
+- **Com senha** (definida na mesma tela): quem souber a senha entra sem ninguém no celular.
+- **Autorizados:** quem foi marcado em "Sempre permitir" (ou entrou com a senha pedindo para lembrar) entra direto.
+  A lista fica na tela de Acesso, com o botão Remover.
+
+### O que liberar no Android (uma vez)
+
+A tela de Acesso mostra cada item com ✓ ou ✗ e um botão que abre o lugar certo:
+
+| Item | Para quê |
+|---|---|
+| **Controle pela Acessibilidade** | Tocar, arrastar, rolar, Voltar, Início e digitar. Em Configurações → Acessibilidade → Ponte. Nos Android mais novos, um aplicativo de fora da loja precisa antes de "Permitir configurações restritas" (Informações do app → menu ⋮). Sem isto, quem acessa só vê. |
+| **Notificações** | Os pedidos de acesso. |
+| **Pedido na tela cheia** (Android 14+) | O pedido aparece por cima de tudo, como uma ligação. |
+| **Bateria sem restrição** | O Android não desliga o acesso com o celular parado. |
+
+### A imagem
+
+A cada sessão o Android pergunta se o Ponte pode gravar a tela ("Começar"; escolha **Tela inteira**). Até alguém
+tocar, a imagem vem pela Acessibilidade, umas 3 vezes por segundo (Android 11 em diante), e quem acessa pode tocar
+em "Começar" de longe. Depois disso a imagem é fluida e só vai o que muda na tela. A imagem é reduzida para o lado
+maior ter até 1600 pixels; girar o celular gira a imagem. Durante a sessão a tela fica acesa.
+
+### Comandos para quem acessa
+
+| No Ponte do Windows 1.14.0 | No aplicativo e no navegador | No celular |
+|---|---|---|
+| Botões ◀ Voltar, ● Início, ▮▮ Apps | Botões Voltar, Início, Apps | Voltar, Início, Apps recentes |
+| Esc, botão direito do mouse | Esc (teclado físico) | Voltar |
+| Tecla do Windows, botão do meio | — | Início |
+| Clique, arrastar, rodinha | Toque, arrastar | Toque, arrastar, rolar |
+| Digitar (com acentos) | Teclado | Escreve no campo em foco |
+| Ctrl+C, Ctrl+V, Ctrl+X, Ctrl+A | — | Copiar, colar, recortar, selecionar tudo no campo |
+
+Um Ponte do Windows anterior à 1.14.0 também acessa um celular, mas sem os botões e digitando pelo teclado
+americano (sem acentos de teclas mortas).
+
+### Opções
+
+- **Ligar sozinho quando o celular ligar** (padrão: ligado).
+- **Sempre pronto** (padrão: ligado): o celular não dorme enquanto o acesso está ligado. Dormindo, ele para de
+  avisar o servidor e sai do ar até alguém mexer nele; acordado, gasta um pouco mais de bateria.
+- **Encerrar a sessão parada depois de** (padrão: nunca), como no Windows.
+
+### Limites
+
+| Limite | Detalhe |
+|---|---|
+| "Começar" a cada sessão | Exigência do Android. Sem alguém tocar (ou quem acessa tocar de longe pela imagem lenta), a imagem fica lenta; antes do Android 11, sem imagem. |
+| Som do celular | Não é transmitido nesta versão. |
+| Arquivos | O celular não recebe nem envia arquivos; quem acessa recebe um aviso. |
+| Telas protegidas | A senha do bloqueio e alguns aplicativos (bancos) aparecem pretos na gravação, como em qualquer gravação de tela. |
+| Fabricantes que fecham aplicativos | Alguns (Xiaomi, Samsung em economia de bateria) ainda podem fechar o Ponte; libere a bateria e o início automático nas configurações do fabricante. |
+| iPhone | O iPhone não pode ser acessado: a Apple não deixa um aplicativo controlar o aparelho. |
+
 ---
 
 ## 7. Para quem mantém
@@ -175,6 +240,17 @@ Separar o protocolo num módulo sem Android permite testá-lo no PC contra o Pon
 | `core/.../Wire.kt` | Tipos de mensagem, enquadramento (`Channel`) e análise do destino digitado (`Target`). |
 | `core/.../Audio.kt` | Leitura do som PCM/ADPCM e formato do ponteiro remoto. |
 | `core/.../Json.kt` | JSON mínimo, para o núcleo não depender de biblioteca. |
+| `core/.../Host.kt` | O lado acessado (1.14.0): registro do ID no servidor (`PonteHost`), autenticação igual à do `HostService` do Windows e a sessão (`HostSession`: quadros, entrada, tempo sem uso). |
+| `core/.../EngineTls.kt` | TLS como servidor por `SSLEngine`, para devolver ao fluxo o primeiro byte já lido. |
+| `core/.../WebSecure.kt` | O canal do Ponte no navegador (`WPONTE1`), o mesmo de `WebChannel.cs`. |
+| `core/.../HostCrypto.kt` | Certificado autoassinado, assinatura no formato do .NET e conferência da autorização. |
+| `core/.../FrameBuilder.kt` | Quadros só com o que mudou, em faixas de blocos de 128 px. |
+| `core/.../PhoneKeyboard.kt` | Teclas do Windows viram texto e ações no celular. |
+| `app/.../AcessoService.kt` | Serviço em primeiro plano do acesso, pedidos de conexão (`Pedidos`) e início com o celular. |
+| `app/.../ControleService.kt` | Acessibilidade: gestos contínuos, Voltar/Início/Apps, texto no campo em foco e a foto de reserva. |
+| `app/.../Captura.kt` | Gravação de tela (MediaProjection + ImageReader), giro e a imagem de reserva. |
+| `app/.../Acesso.kt` | Senha, autorizados e opções (`AcessoStore`) e a identidade do celular como acessado (`AcessoIdentity`). |
+| `app/.../AcessoActivity.kt`, `PedidoActivity.kt` | A tela de Acesso, o pedido "quer acessar" e o pedido de gravação. |
 | `app/.../MainActivity.kt` | Tela inicial, listas, salvar e editar, configurações. |
 | `app/.../SessionActivity.kt` | A sessão: conexão, perguntas (senha, identidade), barra de comandos. |
 | `app/.../RemoteView.kt` | A tela remota: desenho, ampliação, gestos e a ligação com o teclado do Android. |
@@ -190,6 +266,13 @@ inicial é o ID calculado da chave pública, com a mesma conta do Windows.
 
 O Java entrega a assinatura em DER; o Ponte do Windows espera `r` e `s` lado a lado. A conversão
 está em `Crypto.derToP1363`.
+
+A identidade como **acessado** (1.14.0) é outra chave P-256, com certificado autoassinado como o do Windows:
+ela precisa ir para o TLS, então fica num arquivo do aplicativo cifrado com uma chave AES do cofre
+(`AcessoIdentity`). Atualizar o aplicativo mantém o ID; desinstalar cria outro.
+
+O teste `AcessoAoVivoTest` (núcleo) põe um "celular de mentira" no servidor de verdade por alguns minutos, para
+conferir os visualizadores reais: veja o comentário no arquivo.
 
 ### 7.3 Texto digitado
 

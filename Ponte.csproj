@@ -9,7 +9,7 @@
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
     <AssemblyName>Ponte</AssemblyName>
     <RootNamespace>Ponte</RootNamespace>
-    <Version>1.13.0</Version>
+    <Version>1.14.0</Version>
     <Product>Ponte</Product>
     <Description>Acesso remoto entre computadores</Description>
     <ApplicationHighDpiMode>PerMonitorV2</ApplicationHighDpiMode>

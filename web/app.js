@@ -5,7 +5,7 @@
 import * as P from './ponte.js';
 import { Account, SITE } from './conta.js';
 
-const VERSION = '1.13.0';
+const VERSION = '1.14.0';
 const { MouseAction } = P;
 
 const $ = (id) => document.getElementById(id);
@@ -1157,6 +1157,8 @@ function startSession(session) {
   const primary = Math.max(0, session.screens.findIndex((s) => s.Primary));
   const c = { session, tela, keyboard, screen: primary, clipboard: '', soundOn: session.hasSound && state.som, thumbnailTimer: 0 };
   current = c;
+  // Um celular do outro lado: os botões dele na barra.
+  for (const id of ['b-voltar', 'b-inicio', 'b-apps']) $(id).hidden = !session.isPhone;
   renderKeys();
   setStatus('Recebendo a imagem...');
   sendSettings(c);
@@ -2142,6 +2144,9 @@ function init() {
   $('b-teclado').addEventListener('pointerdown', (event) => event.preventDefault());
   $('b-teclado').onclick = toggleKeyboard;
   $('b-teclas').onclick = toggleKeys;
+  $('b-voltar').onclick = () => current?.keyboard.key(P.PhoneKeys.BACK);
+  $('b-inicio').onclick = () => current?.keyboard.key(P.PhoneKeys.HOME);
+  $('b-apps').onclick = () => current?.keyboard.key(P.PhoneKeys.RECENTS);
   $('b-modo').onclick = toggleMode;
   $('b-mais').onclick = showMore;
   $('b-sair').onclick = leave;

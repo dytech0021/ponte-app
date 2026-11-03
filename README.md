@@ -3,7 +3,8 @@
 Acesso remoto entre computadores Windows: ver a tela, controlar mouse e teclado, ouvir o som, trocar
 arquivos e compartilhar a área de transferência. Código próprio em C# / .NET 10 (WinForms), sem pacotes externos.
 Um único `Ponte.exe` faz os dois papéis, o de quem acessa e o de quem é acessado. Há também um
-aplicativo Android (`android/`), que acessa os computadores a partir do celular.
+aplicativo Android (`android/`), que acessa os computadores a partir do celular e, desde a 1.14.0, também deixa o
+celular ser acessado (por um computador, outro celular ou o navegador).
 
 Para rodar, o computador precisa de Windows de 64 bits e do .NET Desktop Runtime 10.
 

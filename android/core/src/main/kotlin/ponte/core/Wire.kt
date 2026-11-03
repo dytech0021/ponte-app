@@ -22,6 +22,9 @@ object Msg {
     const val KEY = 21
     const val TEXT = 22
     const val CLIPBOARD = 30
+    const val FILE_START = 40
+    const val FILE_CHUNK = 41
+    const val FILE_END = 42
     const val SETTINGS = 50
     const val NOTICE = 60
     const val BYE = 99
@@ -35,6 +38,18 @@ object Caps {
     const val CURSOR = 2
     /** Toca o som que o computador envia, quando pedido. */
     const val AUDIO = 4
+    /** Só no AuthResult (1.14.0): quem é acessado é um celular. Texto vai como texto, e há Voltar, Início e Apps. */
+    const val PHONE = 16
+}
+
+/**
+ * Teclas virtuais do Windows que um celular acessado entende como os botões dele (1.14.0): Voltar (também Esc),
+ * Início (também a tecla do Windows) e Apps recentes. Quem acessa um celular manda essas teclas pelos botões.
+ */
+object PhoneKeys {
+    const val BACK = 0xA6 // VK_BROWSER_BACK
+    const val HOME = 0xAC // VK_BROWSER_HOME
+    const val RECENTS = 0x5D // VK_APPS
 }
 
 /** Ações da mensagem de mouse. */

@@ -30,6 +30,16 @@ internal static class Caps
     /// <summary>Visualizador: toca o som de <see cref="Msg.Audio"/>. Controlado: transmite o som, se pedido em Settings.</summary>
     public const int Audio = 4;
     public const int Video = 8;
+    /// <summary>Só no AuthResult (1.14.0): o controlado é um celular. O texto vai pronto e há Voltar, Início e Apps (<see cref="PhoneKeys"/>).</summary>
+    public const int Phone = 16;
+}
+
+/// <summary>Teclas que um celular controlado entende como os botões dele (1.14.0).</summary>
+internal static class PhoneKeys
+{
+    public const int Back = 0xA6;    // VK_BROWSER_BACK
+    public const int Home = 0xAC;    // VK_BROWSER_HOME
+    public const int Recents = 0x5D; // VK_APPS
 }
 
 /// <summary>

@@ -286,3 +286,5 @@ a chave de assinatura (seção 4.1).
 | Lives e amigos | Saíram do Ponte na 1.11.0 e agora ficam no Exilados (veja `docs/SEM-LIVES-1.11.0.md`). O Ponte 1.11.0 do Windows precisa ser publicado no PC que tem a chave de atualização. |
 | Envio de arquivo para o aplicativo do celular | O aplicativo não grava arquivos; por isso o botão de enviar some quando quem acessa é um celular. |
 | Histórico de acessos | Não há arquivo de registro. |
+| Acesso a um celular (1.14.0) | Testado num Android 15 emulado, pelo servidor de verdade: o navegador e um cliente .NET (o mesmo TLS do Ponte do Windows) entram com senha e com aceite na tela; toque, arrastar, rolar, girar, digitar com acento, Voltar e Encerrar pela notificação funcionaram. Falta conferir num celular de verdade (bateria, fabricantes que fecham aplicativos) e a janela do Ponte do Windows 1.14.0 com os botões do celular. |
+| Ponte 1.14.0 do Windows | Botões Voltar/Início/Apps e texto pronto ao acessar um celular. Precisa ser publicado no PC que tem a chave de atualização. |

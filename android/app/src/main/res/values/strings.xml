@@ -1,4 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <string name="app_name">Ponte</string>
+    <string name="controle_nome">Ponte: controle por quem acessa</string>
+    <string name="controle_descricao">Deixa quem você autorizou no Ponte tocar na tela, arrastar, voltar, ir ao início e digitar neste celular durante uma sessão de acesso. Só funciona com o acesso ligado no Ponte e com uma sessão aberta; o Ponte não lê nem guarda o que aparece na tela.</string>
 </resources>

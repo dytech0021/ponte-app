@@ -268,6 +268,9 @@ class Session internal constructor(
     /** O computador transmite o som dele quando pedido (1.5.0 em diante, e se o dono não desligou). */
     val hasSound: Boolean = (hostCaps and Caps.AUDIO) != 0
 
+    /** Do outro lado está um celular (1.14.0 em diante): há Voltar, Início e Apps (teclas de [PhoneKeys]). */
+    val isPhone: Boolean = (hostCaps and Caps.PHONE) != 0
+
     /** Lê as mensagens até a sessão acabar. Bloqueia: rode numa thread própria. */
     fun run(listener: SessionListener) {
         var reason = "O outro computador encerrou a sessão."

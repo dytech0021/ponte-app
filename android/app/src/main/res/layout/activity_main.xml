@@ -131,6 +131,17 @@
             android:paddingEnd="16dp"
             android:text="Lives no Exilados" />
 
+        <!-- Deixar este celular ser acessado por um computador, outro celular ou o navegador (1.14.0). -->
+        <Button
+            android:id="@+id/acesso"
+            style="@style/BotaoSecundario"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="10dp"
+            android:paddingStart="16dp"
+            android:paddingEnd="16dp"
+            android:text="Acesso a este celular" />
+
         <TextView
             style="@style/TituloDeSecao"
             android:layout_width="wrap_content"
