@@ -289,6 +289,10 @@ internal static partial class SelfTest
             }
             check("mouse remoto cai no pixel exato", misses.Count == 0, string.Join("; ", misses));
 
+            // Cada tela em uma janela (1.16.0): a imagem vira a área de trabalho inteira e o ponto de cada janela,
+            // que mostra só a sua tela, tem de cair no pixel exato daquela tela.
+            await CheckAllScreensAsync(session, primary, check);
+
             // Arrastar: apertar na barra de título de uma janela, mover e soltar tem de levar a janela junto.
             var (dragged, dragDetail) = await DragTestWindowAsync(session, primary);
             check("arrastar uma janela pela barra de título leva a janela junto", dragged, dragDetail);
@@ -669,6 +673,91 @@ internal static partial class SelfTest
         var result = await channel.ExpectAsync<AuthResultMsg>(Msg.AuthResult, ct);
         // Trusted verdadeiro confirma que o teste passou mesmo pelo caminho do computador autorizado.
         return challenge.Trusted && !result.Ok;
+    }
+
+    private static async Task CheckAllScreensAsync(ViewerSession session, Rectangle primary, Checker check)
+    {
+        // As contas do recorte em arranjos que este computador pode não ter: tela à esquerda da principal (posição
+        // negativa), alturas diferentes e três telas. O ponto de cada janela, pelo que o controlado faz com ele
+        // (InputInjector.Mouse), tem de virar o pixel exato daquela tela.
+        var layouts = new[]
+        {
+            new[] { new Rectangle(0, 0, 1920, 1080), new Rectangle(1920, 0, 1920, 1080) },
+            new[] { new Rectangle(0, 0, 2560, 1440), new Rectangle(-1280, 360, 1280, 1024) },
+            new[] { new Rectangle(0, 0, 1920, 1080), new Rectangle(1920, -200, 1080, 1920), new Rectangle(-1366, 312, 1366, 768) },
+        };
+        var wrong = new List<string>();
+        foreach (var layout in layouts)
+        {
+            var all = layout.Aggregate(Rectangle.Union);
+            foreach (var screen in layout)
+            {
+                // Sem criar um RemoteView: um controle criado nesta linha de execução, que não tem janelas, prende o
+                // próximo await (ele tenta voltar para uma fila de mensagens que ninguém lê).
+                var view = new Size(screen.Width * 53 / 100, screen.Height * 41 / 100);
+                var source = RemoteView.Source(new RectangleF((screen.X - all.X) / (float)all.Width, (screen.Y - all.Y) / (float)all.Height,
+                    screen.Width / (float)all.Width, screen.Height / (float)all.Height), all.Width / (double)all.Height, all.Width, all.Height);
+                var fit = RemoteView.Fit(view, screen.Width, screen.Height);
+                foreach (var (fx, fy) in new[] { (0.0, 0.0), (0.137, 0.211), (0.5, 0.5), (0.999, 0.999) })
+                {
+                    var local = new Point((int)(view.Width * fx), (int)(view.Height * fy));
+                    var (nx, ny) = RemoteView.ToRemote(local, view, all.Width, all.Height, source);
+                    int gotX = all.X + (int)Math.Round((double)nx * (all.Width - 1) / 65535), gotY = all.Y + (int)Math.Round((double)ny * (all.Height - 1) / 65535);
+                    int wantX = screen.X + Math.Clamp((int)Math.Floor((local.X - fit.X + 0.5) * screen.Width / fit.Width), 0, screen.Width - 1);
+                    int wantY = screen.Y + Math.Clamp((int)Math.Floor((local.Y - fit.Y + 0.5) * screen.Height / fit.Height), 0, screen.Height - 1);
+                    if (gotX != wantX || gotY != wantY) wrong.Add($"{screen}: pedido {wantX},{wantY}, daria {gotX},{gotY}");
+                }
+            }
+        }
+        check("recorte de cada tela acerta o pixel em arranjos de duas e três telas", wrong.Count == 0, string.Join("; ", wrong.Take(4)));
+
+        var here = Screen.AllScreens;
+        bool described = session.HostHasAllScreens && session.Screens.Length == here.Length &&
+                         session.Screens.All(s => here[s.Index].Bounds == new Rectangle(s.X, s.Y, s.Width, s.Height));
+        check("o controlado oferece todas as telas e diz onde cada uma fica", described,
+            string.Join("; ", session.Screens.Select(s => $"tela {s.Index + 1}: {s.X},{s.Y} {s.Width}x{s.Height}")), false);
+
+        var whole = SystemInformation.VirtualScreen;
+        int shown = Math.Max(0, Array.FindIndex(session.Screens, s => s.Primary));
+        await session.SendSettingsAsync(ScreenInfo.All, 60);
+        bool wholeImage = await WaitAsync(() => { lock (session.CanvasLock) return session.Canvas is { } c && c.Width == whole.Width && c.Height == whole.Height; });
+        string size;
+        lock (session.CanvasLock) size = session.Canvas is { } c ? $"{c.Width} x {c.Height}" : "sem imagem";
+        check("todas as telas chegam numa imagem só", wholeImage, $"{size}; esperado {whole.Width} x {whole.Height}", false);
+
+        var misses = new List<string>();
+        if (wholeImage)
+        {
+            foreach (var screen in session.Screens)
+            {
+                // O mesmo recorte que a janela daquela tela faz, com a janela num tamanho qualquer (reduzida).
+                var view = new Size(screen.Width * 47 / 100, screen.Height * 61 / 100);
+                var source = RemoteView.Source(new RectangleF((screen.X - whole.X) / (float)whole.Width, (screen.Y - whole.Y) / (float)whole.Height,
+                    screen.Width / (float)whole.Width, screen.Height / (float)whole.Height), whole.Width / (double)whole.Height, whole.Width, whole.Height);
+                if (source != new Rectangle(screen.X - whole.X, screen.Y - whole.Y, screen.Width, screen.Height))
+                {
+                    misses.Add($"tela {screen.Index + 1}: recorte {source}");
+                    continue;
+                }
+                foreach (var (fx, fy) in new[] { (0.137, 0.211), (0.5, 0.5), (0.903, 0.847) })
+                {
+                    var local = new Point((int)(view.Width * fx), (int)(view.Height * fy));
+                    var sent = RemoteView.ToRemote(local, view, whole.Width, whole.Height, source);
+                    var fit = RemoteView.Fit(view, screen.Width, screen.Height);
+                    int wantX = screen.X + (int)Math.Floor((local.X - fit.X + 0.5) * screen.Width / fit.Width);
+                    int wantY = screen.Y + (int)Math.Floor((local.Y - fit.Y + 0.5) * screen.Height / fit.Height);
+                    await session.SendMouseAsync(sent.X, sent.Y, 0, 0);
+                    await Task.Delay(120);
+                    Native.GetCursorPos(out var landed);
+                    if (landed.X != wantX || landed.Y != wantY) misses.Add($"tela {screen.Index + 1}: pedido {wantX},{wantY}, ficou em {landed.X},{landed.Y}");
+                }
+            }
+        }
+        check("mouse de cada janela cai no pixel exato da tela dela", wholeImage && misses.Count == 0, string.Join("; ", misses), false);
+
+        await session.SendSettingsAsync(shown, 60);
+        bool back = await WaitAsync(() => { lock (session.CanvasLock) return session.Canvas is { } c && c.Width == primary.Width && c.Height == primary.Height; });
+        check("volta a mandar uma tela só", back, "", false);
     }
 
     private static async Task<bool> WaitAsync(Func<bool> condition, int tenths = 50)

@@ -22,7 +22,7 @@ internal sealed class MainForm : Form
     private string _lastRemoteClipboard = "";
     private UpdateManifest? _pendingUpdate;
     private string _pendingFile = "";
-    private bool _checkingUpdate, _restarting, _closed, _applyingUpdate;
+    private bool _checkingUpdate, _restarting, _closed, _applyingUpdate, _exitRequested, _systemShutdown;
     // "Procurar atualização", que vira "Atualizar agora" com a versão nova pronta (e o aviso perto do relógio).
     private readonly Button _checkUpdate;
     private string _offeredVersion = "";
@@ -197,7 +197,7 @@ internal sealed class MainForm : Form
     }
 
     // Ninguém conectado nem acessando outro computador.
-    private bool Idle => _host.Current is null && _viewers.Count == 0;
+    private bool Idle => _host.Current is null && _viewers.Count == 0 && (!WindowsHost.Owns(_config) || !WindowsHost.ActiveSession);
 
     // Alguém usando a janela do Ponte agora: a atualização pergunta em vez de reiniciar sozinha.
     private bool InUse => Visible && WindowState != FormWindowState.Minimized && Native.IdleTime < TimeSpan.FromMinutes(10);
@@ -714,7 +714,7 @@ internal sealed class MainForm : Form
             else _ = CheckForUpdateAsync(manual: true);
         });
         menu.Items.Add(new ToolStripSeparator());
-        menu.Items.Add("Fechar o Ponte", null, (_, _) => Close());
+        menu.Items.Add("Fechar o Ponte", null, (_, _) => ExitApplication());
         string mode = Elevation.IsElevated ? " (administrador)" : "";
         var tray = new NotifyIcon
         {
@@ -731,6 +731,13 @@ internal sealed class MainForm : Form
         if (_args.Contains("--atualizado"))
             tray.ShowBalloonTip(8_000, "Ponte atualizado", $"O Ponte foi atualizado para a versão {Updater.Current}.", ToolTipIcon.Info);
         return tray;
+    }
+
+    internal void ExitApplication()
+    {
+        _exitRequested = true;
+        try { Close(); }
+        finally { if (!_closed) _exitRequested = false; else if (WindowsHost.Owns(_config)) WindowsHost.Heartbeat(true); }
     }
 
     private void ShowFromTray()
@@ -822,6 +829,15 @@ internal sealed class MainForm : Form
 
     protected override void OnFormClosing(FormClosingEventArgs e)
     {
+        if (e.CloseReason == CloseReason.WindowsShutDown) _systemShutdown = true;
+        // O X e Alt+F4 guardam a janela na bandeja sem parar o acesso remoto.
+        // A saída explícita, a atualização e o encerramento do Windows continuam fechando de verdade.
+        if (!_restarting && !_exitRequested && e.CloseReason == CloseReason.UserClosing)
+        {
+            e.Cancel = true;
+            Hide();
+            return;
+        }
         if (!_restarting && _host.Current is not null && e.CloseReason == CloseReason.UserClosing &&
             MessageBox.Show(this, "Há uma sessão ativa neste computador. Fechar o Ponte encerra a sessão. Continuar?", "Ponte",
                 MessageBoxButtons.YesNo, MessageBoxIcon.Question) != DialogResult.Yes)
@@ -842,6 +858,7 @@ internal sealed class MainForm : Form
         if (IsHandleCreated) Native.RemoveClipboardFormatListener(Handle);
         foreach (var viewer in _viewers.ToArray()) viewer.Close();
         _indicator?.Finish();
+        if (!_restarting && !_systemShutdown) _host.Current?.Stop();
         _host.Dispose();
         base.OnFormClosed(e);
     }

@@ -50,6 +50,7 @@ internal sealed class HostSession(Channel channel, HelloMsg hello, string remote
     public DateTime Started { get; } = DateTime.Now;
     /// <summary>Como a pessoa entrou: senha, aceite na tela ou autorização salva.</summary>
     public string Access { get; init; } = "";
+    public string ViewerKeyHash { get; init; } = "";
     /// <summary>O outro lado grava os arquivos que chegam. O aplicativo do celular não grava, e até a 1.0.0 não avisava isso.</summary>
     public bool PeerReceivesFiles { get; } = hello.Caps is { } caps ? (caps & Caps.Files) != 0 : hello.User != "Android";
     /// <summary>O visualizador pediu o som e este computador o está transmitindo.</summary>
@@ -60,9 +61,17 @@ internal sealed class HostSession(Channel channel, HelloMsg hello, string remote
     public event Action<string>? FileReceived;
     public event Action<string>? ClipboardReceived;
 
-    public void Stop()
+    public void Stop(bool reconnect = false)
     {
-        _stoppedHere = true;
+        if (!reconnect && !_stoppedHere)
+        {
+            _stoppedHere = true; config.BlockResume(ViewerKeyHash);
+            // Finish the currently framed message before Bye. Cancelling a frame first can truncate it,
+            // making the viewer mistake a deliberate local stop for an unexpected network failure.
+            using var brief = new CancellationTokenSource(TimeSpan.FromSeconds(2));
+            try { channel.SendAsync(Msg.Bye, Encoding.UTF8.GetBytes("Sessão encerrada no computador remoto."), brief.Token).GetAwaiter().GetResult(); }
+            catch (Exception ex) when (ex is IOException or OperationCanceledException or ObjectDisposedException) { }
+        }
         _stop.Cancel();
     }
 
@@ -150,6 +159,11 @@ internal sealed class HostSession(Channel channel, HelloMsg hello, string remote
         }
         finally
         {
+            if (_stoppedHere)
+            {
+                using var goodbye = new CancellationTokenSource(TimeSpan.FromSeconds(2));
+                await Quiet(channel.SendAsync(Msg.Bye, Encoding.UTF8.GetBytes("Sessão encerrada no computador remoto."), goodbye.Token));
+            }
             _stop.Cancel();
             SetSound(false);
             foreach (var task in new[] { capture, sound, pointer, idle })
@@ -165,7 +179,7 @@ internal sealed class HostSession(Channel channel, HelloMsg hello, string remote
     // Só o laço de leitura liga e desliga a captura, então não há disputa por _capture.
     private void SetSound(bool wanted)
     {
-        wanted &= shareSound && !_stop.IsCancellationRequested;
+        wanted &= shareSound && !_stop.IsCancellationRequested && !WindowsHost.Agent;
         if (wanted == (_capture is not null)) return;
         if (wanted)
         {
@@ -186,6 +200,8 @@ internal sealed class HostSession(Channel channel, HelloMsg hello, string remote
 
     private static Rectangle ScreenBounds(int index)
     {
+        // Todas as telas (1.16.0): a área de trabalho inteira, que quem acessa recorta em uma janela por tela.
+        if (index == ScreenInfo.All) return SystemInformation.VirtualScreen;
         var screens = Screen.AllScreens;
         return screens[Math.Clamp(index, 0, screens.Length - 1)].Bounds;
     }
@@ -243,7 +259,7 @@ internal sealed class HostSession(Channel channel, HelloMsg hello, string remote
             byte[]? frame = null;
             try
             {
-                frame = capturer.Capture(ScreenBounds(_screen), _quality, Interlocked.Exchange(ref _forceFull, 0) == 1, options.Chroma444);
+                frame = capturer.Capture(ScreenBounds(_screen), _quality, Interlocked.Exchange(ref _forceFull, 0) == 1, options.Chroma444, options.MaxHeight);
             }
             catch (Exception ex) when (ex is System.ComponentModel.Win32Exception or ArgumentException or System.Runtime.InteropServices.ExternalException)
             {
@@ -329,12 +345,12 @@ internal sealed class HostSession(Channel channel, HelloMsg hello, string remote
             _viewerProblem = null;
         }
         var screens = Screen.AllScreens;
-        var screen = screens[Math.Clamp(_screen, 0, screens.Length - 1)];
+        var sources = _screen == ScreenInfo.All ? VideoSource.AllScreens() : VideoSource.For(screens[Math.Clamp(_screen, 0, screens.Length - 1)]);
         string problem = "";
         long started = 0;
         try
         {
-            foreach (var source in VideoSource.For(screen))
+            foreach (var source in sources)
             {
                 int id = 0;
                 try
@@ -345,7 +361,8 @@ internal sealed class HostSession(Channel channel, HelloMsg hello, string remote
                         {
                             id = Interlocked.Increment(ref _streamId);
                             started = Stopwatch.GetTimestamp();
-                            await channel.SendJsonAsync(Msg.VideoStart, new VideoStartMsg(id, source.Bounds.Width, source.Bounds.Height,
+                            var output = options.Size(source.Bounds.Width, source.Bounds.Height);
+                            await channel.SendJsonAsync(Msg.VideoStart, new VideoStartMsg(id, output.Width, output.Height,
                                 options.Codec, encoder, options.Fps, options.Chroma444, options.UltraLowLatency, source.Name), ct);
                         }
                         byte[] packet = new byte[4 + frame.Length];
@@ -414,6 +431,7 @@ internal sealed class HostSession(Channel channel, HelloMsg hello, string remote
             if (limit > 0 && idle >= limit)
             {
                 if (Interlocked.CompareExchange(ref _end, $"encerrada por falta de uso ({Span(limit)} sem mexer)", null) is null) EndedIdle = true;
+                config.BlockResume(ViewerKeyHash);
                 // O motivo vai na despedida: o visualizador 1.13.0 em diante o mostra; um anterior só vê a sessão terminar.
                 using var brief = CancellationTokenSource.CreateLinkedTokenSource(ct);
                 brief.CancelAfter(TimeSpan.FromSeconds(2));
@@ -497,13 +515,14 @@ internal sealed class HostSession(Channel channel, HelloMsg hello, string remote
                     lock (_videoGate)
                     {
                         var requested = _sendVideo ? (s.Video ?? _video).Normalize() : new VideoOptions();
+                        if (WindowsHost.Agent) requested = requested with { Codec = "jpeg", Fps = 20 };
                         if (requested != _video || s.Screen != _screen)
                         {
                             _video = requested;
                             _videoRevision++;
                             CancelActiveVideo();
                         }
-                        _screen = s.Screen;
+                        _screen = s.Screen < 0 ? ScreenInfo.All : s.Screen;
                     }
                     _quality = Math.Clamp(s.Quality, 10, 100);
                     SetSound(s.Audio);
@@ -524,6 +543,21 @@ internal sealed class HostSession(Channel channel, HelloMsg hello, string remote
                 case Msg.Bye:
                     _byeReceived = true;
                     return;
+                case Msg.Ping when p.Length == 8:
+                    await channel.SendAsync(Msg.Pong, p, ct);
+                    break;
+                case Msg.Restart when p.Length == 0:
+                    if (!config.AllowRemoteRestart)
+                    { await channel.SendAsync(Msg.RestartResult, Encoding.UTF8.GetBytes("O dono desativou o reinício remoto nas configurações."), ct); break; }
+                    try
+                    {
+                        RemotePower.ScheduleRestart();
+                        SessionLog.Write($"controlado: reinício solicitado por {PeerName} ({Access})");
+                        await channel.SendAsync(Msg.RestartResult, default, ct);
+                    }
+                    catch (Exception ex) when (ex is PonteException or System.ComponentModel.Win32Exception)
+                    { await channel.SendAsync(Msg.RestartResult, Encoding.UTF8.GetBytes(ex.Message), ct); }
+                    break;
             }
         }
     }
@@ -534,13 +568,28 @@ internal sealed class HostSession(Channel channel, HelloMsg hello, string remote
 /// mantém o registro do ID nele. Toda conexão passa por senha, por um aceite explícito na tela ou
 /// pela lista de computadores que este já autorizou.
 /// </summary>
-internal sealed class HostService(AppConfig config) : IDisposable
+internal sealed class HostService(AppConfig config, bool standalone = false) : IDisposable
 {
     private readonly CancellationTokenSource _cts = new();
     private TcpListener? _listener;
     private HostSession? _current;
     private int _failures;
     private DateTime _lockedUntil;
+    private HostService? _managed;
+    internal Task? CoordinationTask { get; private set; }
+    internal void SetManaged(HostService? host)
+    {
+        _managed = host;
+        if (host is not null)
+        {
+            host.StatusChanged += () => StatusChanged?.Invoke();
+            host.SessionStarted += s => SessionStarted?.Invoke(s);
+            host.SessionEnded += s => SessionEnded?.Invoke(s);
+            host.FileReceived += p => FileReceived?.Invoke(p);
+            host.ClipboardReceived += t => ClipboardReceived?.Invoke(t);
+        }
+        StatusChanged?.Invoke();
+    }
 
     public string ReceiveDir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), "Downloads", "Ponte");
     public Func<IncomingRequest, Task<Permission>>? AskPermission;
@@ -550,13 +599,22 @@ internal sealed class HostService(AppConfig config) : IDisposable
     public event Action<string>? FileReceived;
     public event Action<string>? ClipboardReceived;
 
-    public HostSession? Current => _current;
-    public bool RelayOnline { get; private set; }
-    public string RelayStatus { get; private set; } = "";
+    public HostSession? Current => _managed?.Current ?? _current;
+    private bool _relayOnline;
+    private string _relayStatus = "";
+    public bool RelayOnline { get => _managed?.RelayOnline ?? _relayOnline; private set => _relayOnline = value; }
+    public string RelayStatus { get => _managed?.RelayStatus ?? _relayStatus; private set => _relayStatus = value; }
     public string DirectStatus { get; private set; } = "";
 
     public void Start(IPAddress? bind = null)
     {
+        if (!standalone && (WindowsHost.Agent || WindowsHost.Owns(config)))
+        {
+            RelayStatus = "Serviço do Windows ativo; aguardando a área de trabalho ou a passagem do host.";
+            CoordinationTask = WindowsHost.CoordinateAsync(this, config, _cts.Token);
+            _ = CoordinationTask.ContinueWith(task => { ErrorLog.Write(task.Exception); SetRelay(false,"Não foi possível iniciar o host pelo serviço. Reabra o Ponte como administrador."); }, TaskContinuationOptions.OnlyOnFaulted);
+            return;
+        }
         if (config.DirectEnabled)
         {
             try
@@ -795,9 +853,11 @@ internal sealed class HostService(AppConfig config) : IDisposable
                 if (answer == Permission.Always && signed) paired = config.Trust(keyHash, viewerId, name, user, viaPassword: false);
             }
 
+            if (ok && hello.Resume && config.ResumeBlocked(keyHash)) { ok = false; reason = "A sessão foi encerrada no computador remoto. Conecte novamente manualmente."; }
+            if (ok && signed && !hello.Resume) config.ClearResumeBlock(keyHash);
             if (ok)
             {
-                session = new HostSession(channel, hello, remote, ReceiveDir, config.ShareSound, config) { Access = access };
+                session = new HostSession(channel, hello, remote, ReceiveDir, config.ShareSound, config) { Access = access, ViewerKeyHash = signed ? keyHash : "" };
                 if (Interlocked.CompareExchange(ref _current, session, null) is not null)
                 {
                     session = null;
@@ -806,8 +866,8 @@ internal sealed class HostService(AppConfig config) : IDisposable
                 }
             }
 
-            var screens = Screen.AllScreens.Select((s, i) => new ScreenInfo(i, s.Bounds.Width, s.Bounds.Height, s.Primary)).ToArray();
-            int caps = Caps.Cursor | Caps.Video | (config.ShareSound ? Caps.Audio : 0);
+            var screens = Screen.AllScreens.Select((s, i) => new ScreenInfo(i, s.Bounds.Width, s.Bounds.Height, s.Primary, s.Bounds.X, s.Bounds.Y)).ToArray();
+            int caps = Caps.Cursor | Caps.Video | Caps.Management | Caps.AllScreens | (config.ShareSound && !WindowsHost.Agent ? Caps.Audio : 0);
             await channel.SendJsonAsync(Msg.AuthResult, new AuthResultMsg(ok, reason, Environment.MachineName, screens, paired, Updater.Current.ToString(), caps), _cts.Token);
             if (session is null) return;
 
@@ -862,7 +922,9 @@ internal sealed class HostService(AppConfig config) : IDisposable
     public void Dispose()
     {
         _cts.Cancel();
+        _managed?.Dispose();
+        _relayStream?.Dispose();
         _listener?.Stop();
-        _current?.Stop();
+        _current?.Stop(reconnect: true);
     }
 }

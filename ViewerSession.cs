@@ -7,7 +7,21 @@ namespace Ponte;
 /// <summary>Uma sessão em que este computador controla outro.</summary>
 internal sealed class ViewerSession : IAsyncDisposable
 {
-    private readonly Channel _channel;
+    private Channel _channel;
+    private Func<CancellationToken, Task<ViewerSession>>? _reconnect;
+    private bool _unexpected, _restartPending;
+    private volatile bool _reconnecting;
+    private SettingsMsg? _lastSettings;
+    private string _lastReason = "";
+    private long _lastReceived = System.Diagnostics.Stopwatch.GetTimestamp();
+    public bool CanReconnect => _reconnect is not null;
+    public bool Reconnecting => _reconnecting;
+    public bool HostHasManagement { get; }
+    /// <summary>O outro computador manda todas as telas numa imagem só, para abrir uma janela por tela (1.16.0 em diante).</summary>
+    public bool HostHasAllScreens { get; }
+    public double RoundTripMilliseconds { get; private set; }
+    public event Action<string>? ConnectionStatusChanged;
+    public event Action? Reconnected;
     private readonly CancellationTokenSource _stop = new();
     private readonly string _receiveDir;
     private Task? _reader;
@@ -26,7 +40,7 @@ internal sealed class ViewerSession : IAsyncDisposable
     /// <summary>Como o destino é identificado na configuração ("id:..." ou "ip:...").</summary>
     public string Key { get; }
     public string HostName { get; }
-    public ScreenInfo[] Screens { get; }
+    public ScreenInfo[] Screens { get; private set; }
     public string Fingerprint { get; }
     /// <summary>Este computador está na lista de autorizados do outro: as próximas conexões entram direto.</summary>
     public bool Paired { get; }
@@ -67,8 +81,10 @@ internal sealed class ViewerSession : IAsyncDisposable
         Key = key;
         Target = target;
         HostHasSound = (result.Caps & Caps.Audio) != 0;
+        HostHasManagement = (result.Caps & Caps.Management) != 0;
         HostHasVideo = (result.Caps & Caps.Video) != 0;
         HostIsPhone = (result.Caps & Caps.Phone) != 0;
+        HostHasAllScreens = (result.Caps & Caps.AllScreens) != 0;
         HostName = result.HostName;
         Screens = result.Screens;
         Fingerprint = fingerprint;
@@ -79,7 +95,7 @@ internal sealed class ViewerSession : IAsyncDisposable
     /// <param name="askPassword">Chamado quando o outro lado pede senha. Devolve a senha, "" para pedir permissão ou null para desistir.</param>
     /// <param name="confirmNewIdentity">Chamado quando a identidade do destino mudou desde a última conexão.</param>
     public static async Task<ViewerSession> ConnectAsync(AppConfig config, string target, Func<Task<string?>> askPassword,
-        Func<Task<bool>> confirmNewIdentity, string receiveDir, CancellationToken ct)
+        Func<Task<bool>> confirmNewIdentity, string receiveDir, CancellationToken ct, bool retrying = false)
     {
         var (key, shown) = AppConfig.Target(target);
 
@@ -88,14 +104,17 @@ internal sealed class ViewerSession : IAsyncDisposable
         try
         {
             string fingerprint = Security.Fingerprint(remote);
-            if (config.KnownHosts.TryGetValue(key, out string? known) && known != fingerprint && !await confirmNewIdentity())
+            if (config.KnownHosts.TryGetValue(key, out string? known) && known != fingerprint && (retrying || !await confirmNewIdentity()))
+            {
+                if (retrying) throw new UnauthorizedAccessException("A identidade do computador mudou. Conecte novamente para conferir.");
                 throw new PonteException("Conexão cancelada.");
+            }
 
             using var handshake = CancellationTokenSource.CreateLinkedTokenSource(ct);
             handshake.CancelAfter(TimeSpan.FromSeconds(20));
             string ownKey = Convert.ToBase64String(config.Certificate.PublicKey.ExportSubjectPublicKeyInfo());
             await channel.SendJsonAsync(Msg.Hello, new HelloMsg(Environment.MachineName, Environment.UserName, Updater.Current.ToString(), ownKey,
-                Caps.Files | Caps.Cursor | Caps.Audio | Caps.Video), handshake.Token);
+                Caps.Files | Caps.Cursor | Caps.Audio | Caps.Video, Resume: retrying), handshake.Token);
             var challenge = await channel.ExpectAsync<ChallengeMsg>(Msg.Challenge, handshake.Token);
             byte[] nonce = Convert.FromBase64String(challenge.Nonce), remoteHash = Security.CertificateHash(remote);
             if (nonce.Length != 32) throw new PonteException("O outro computador enviou um desafio inválido.");
@@ -103,10 +122,14 @@ internal sealed class ViewerSession : IAsyncDisposable
             string signature = Security.SignPairing(config.Certificate, nonce, remoteHash);
 
             string? proof = null;
+            string? reconnectPassword = null;
+            if (retrying && !challenge.Trusted && !challenge.HasPassword) throw new UnauthorizedAccessException("A autorização automática não está mais disponível.");
             if (challenge.HasPassword && !challenge.Trusted)
             {
                 handshake.CancelAfter(Timeout.InfiniteTimeSpan);
-                string? password = await askPassword() ?? throw new PonteException("Conexão cancelada.");
+                string? password = await askPassword();
+                if (password is null) { if (retrying) throw new UnauthorizedAccessException("A autorização foi revogada. Conecte novamente."); throw new PonteException("Conexão cancelada."); }
+                reconnectPassword = password;
                 if (password.Length > 0)
                 {
                     if (challenge.Iterations is < 1000 or > Security.MaxIterations) throw new PonteException("O outro computador enviou parâmetros de senha inválidos.");
@@ -121,11 +144,20 @@ internal sealed class ViewerSession : IAsyncDisposable
             using var waiting = CancellationTokenSource.CreateLinkedTokenSource(ct);
             waiting.CancelAfter(TimeSpan.FromSeconds(75));
             var result = await channel.ExpectAsync<AuthResultMsg>(Msg.AuthResult, waiting.Token);
-            if (!result.Ok) throw new PonteException(result.Reason.Length > 0 ? result.Reason : "Conexão recusada.");
+            if (!result.Ok)
+            {
+                string denied = result.Reason.Length > 0 ? result.Reason : "Conexão recusada.";
+                if (retrying && !denied.Contains("sessão em andamento")) throw new UnauthorizedAccessException(denied);
+                throw new PonteException(denied);
+            }
 
             channel.Limit = Channel.MaxPayload;
             config.RecordConnection(key, shown, result.HostName, fingerprint, result.Paired);
-            return new ViewerSession(channel, key, shown, result, fingerprint, receiveDir);
+            var connected = new ViewerSession(channel, key, shown, result, fingerprint, receiveDir);
+            if (config.AutoReconnect && connected.HostHasManagement && (result.Paired || !string.IsNullOrEmpty(reconnectPassword)))
+                connected._reconnect = token => ConnectAsync(config, target, () => Task.FromResult(reconnectPassword),
+                    () => Task.FromResult(false), receiveDir, token, retrying: true);
+            return connected;
         }
         catch (Exception ex)
         {
@@ -140,15 +172,59 @@ internal sealed class ViewerSession : IAsyncDisposable
 
     private async Task ReadLoopAsync()
     {
+        try
+        {
+            bool first = true;
+            while (first || !_stop.IsCancellationRequested)
+            {
+                first = false;
+                _unexpected = false;
+                await ReadOnceAsync();
+                if (_stop.IsCancellationRequested || !_unexpected || _reconnect is null) break;
+                _reconnecting = true;
+                await _channel.DisposeAsync();
+                bool restored = false;
+                var until = DateTime.UtcNow.AddMinutes(10);
+                for (int attempt = 1; DateTime.UtcNow < until && !_stop.IsCancellationRequested; attempt++)
+                {
+                    ConnectionStatusChanged?.Invoke($"{(_restartPending ? "Aguardando o computador reiniciar" : "Conexão interrompida")}. Reconectando... tentativa {attempt}. Feche esta janela para cancelar.");
+                    await Task.Delay(TimeSpan.FromSeconds(Math.Min(10, attempt * 2)), _stop.Token);
+                    try
+                    {
+                        using var deadline = CancellationTokenSource.CreateLinkedTokenSource(_stop.Token);
+                        deadline.CancelAfter(TimeSpan.FromSeconds(15));
+                        var next = await _reconnect(deadline.Token);
+                        _channel = next._channel; Screens = next.Screens;
+                        _lastReceived = System.Diagnostics.Stopwatch.GetTimestamp();
+                        _reconnecting = false; _restartPending = false;
+                        if (_lastSettings is { } settings) await _channel.SendJsonAsync(Msg.Settings, settings, _stop.Token);
+                        ConnectionStatusChanged?.Invoke("Reconectado a " + HostName);
+                        SessionLog.Write("acessando: sessão retomada após interrupção com " + HostName);
+                        Reconnected?.Invoke(); restored = true; break;
+                    }
+                    catch (UnauthorizedAccessException ex) { _lastReason = ex.Message; break; }
+                    catch (Exception ex) when (ex is PonteException or IOException or OperationCanceledException or System.Security.Authentication.AuthenticationException) { }
+                }
+                if (!restored) { if (_lastReason.Length == 0) _lastReason = "Não foi possível retomar a conexão em dez minutos."; break; }
+            }
+        }
+        catch (OperationCanceledException) { }
+        finally { _reconnecting = false; if (Interlocked.Exchange(ref _closedRaised, 1) == 0) Closed?.Invoke(_stop.IsCancellationRequested ? "" : _lastReason); }
+    }
+
+    private async Task ReadOnceAsync()
+    {
         string reason = "O outro computador encerrou a sessão.";
         // O motivo técnico, para o registro de sessões (o de cima é o que aparece na tela).
         string detail = "a conexão foi fechada sem aviso (pelo outro lado ou no caminho)";
         SessionLog.Write($"acessando: começou a sessão com {HostName} ({Target}, Ponte {HostVersion} lá)");
         try
         {
+            _unexpected = true;
             using var files = new FileReceiver(_receiveDir);
             while (await _channel.ReadAsync(_stop.Token) is { } m)
             {
+                Interlocked.Exchange(ref _lastReceived, System.Diagnostics.Stopwatch.GetTimestamp());
                 switch (m.Type)
                 {
                     case Msg.Frame:
@@ -186,12 +262,23 @@ internal sealed class ViewerSession : IAsyncDisposable
                         Notice?.Invoke(Encoding.UTF8.GetString(m.Payload));
                         break;
                     case Msg.Bye:
+                        _unexpected = false;
                         // A 1.13.0 em diante diz o motivo quando foi ela que encerrou (por falta de uso, por exemplo).
                         string told = new(Encoding.UTF8.GetString(m.Payload.AsSpan(0, Math.Min(m.Payload.Length, 2048)))
                             .Where(c => !char.IsControl(c)).ToArray());
                         if (told.Length > 0) reason = told;
                         detail = "o outro computador encerrou" + (told.Length > 0 ? $": {told}" : "");
                         return;
+                    case Msg.Pong when m.Payload.Length == 8:
+                        long sent = BitConverter.ToInt64(m.Payload);
+                        long now = System.Diagnostics.Stopwatch.GetTimestamp();
+                        if (sent > 0 && sent <= now) RoundTripMilliseconds = System.Diagnostics.Stopwatch.GetElapsedTime(sent, now).TotalMilliseconds;
+                        break;
+                    case Msg.RestartResult:
+                        string restartError = Encoding.UTF8.GetString(m.Payload);
+                        _restartPending = restartError.Length == 0;
+                        Notice?.Invoke(restartError.Length > 0 ? restartError : "Reinício aceito. Aguardando o computador voltar...");
+                        break;
                 }
             }
         }
@@ -218,7 +305,7 @@ internal sealed class ViewerSession : IAsyncDisposable
                              $"recebidos {SessionLog.Megabytes(BytesReceived)}, {VideoStatus}: {detail}");
             try { await StopVideoAsync(); }
             catch (Exception ex) { ErrorLog.Write(ex); }
-            if (Interlocked.Exchange(ref _closedRaised, 1) == 0) Closed?.Invoke(reason);
+            _lastReason = reason;
         }
     }
 
@@ -339,8 +426,25 @@ internal sealed class ViewerSession : IAsyncDisposable
 
     /// <param name="sound">Pede o som de lá. Um controlado anterior à 1.4.0 ignora o pedido.</param>
     /// <param name="idleSeconds">Tempo sem uso até lá encerrar a sessão (0 é nunca; nulo deixa valer o de lá). Um controlado anterior à 1.13.0 ignora.</param>
-    public Task SendSettingsAsync(int screen, int quality, bool sound = false, VideoOptions? video = null, int? idleSeconds = null) =>
-        Quiet(_channel.SendJsonAsync(Msg.Settings, new SettingsMsg(screen, quality, sound, HostHasVideo ? video?.Normalize() : null, idleSeconds), _stop.Token));
+    public Task SendSettingsAsync(int screen, int quality, bool sound = false, VideoOptions? video = null, int? idleSeconds = null)
+    {
+        _lastSettings = new SettingsMsg(screen, quality, sound, HostHasVideo ? video?.Normalize() : null, idleSeconds);
+        return _reconnecting ? Task.CompletedTask : Quiet(_channel.SendJsonAsync(Msg.Settings, _lastSettings, _stop.Token));
+    }
+
+    public Task RequestRestartAsync()
+    {
+        if (!HostHasManagement || _reconnecting) throw new PonteException("O computador remoto não está pronto para reiniciar pelo Ponte.");
+        _restartPending = true;
+        return _channel.SendAsync(Msg.Restart, default, _stop.Token);
+    }
+    public Task PingAsync()
+    {
+        if (!HostHasManagement || _reconnecting || _stop.IsCancellationRequested) return Task.CompletedTask;
+        if (System.Diagnostics.Stopwatch.GetElapsedTime(Interlocked.Read(ref _lastReceived)).TotalSeconds > 20)
+            return _channel.DisposeAsync().AsTask();
+        return Quiet(_channel.SendAsync(Msg.Ping, BitConverter.GetBytes(System.Diagnostics.Stopwatch.GetTimestamp()), _stop.Token));
+    }
 
     /// <summary>Grava uma redução da tela remota, para reconhecer o computador na lista. Falso se ainda não há imagem.</summary>
     public bool SaveThumbnail(string path)
@@ -404,5 +508,6 @@ internal sealed class ViewerSession : IAsyncDisposable
             Canvas?.Dispose();
             Canvas = null;
         }
+        _reconnect = null;
     }
 }

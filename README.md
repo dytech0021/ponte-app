@@ -18,6 +18,7 @@ Para rodar, o computador precisa de Windows de 64 bits e do .NET Desktop Runtime
 | [Segurança](docs/seguranca.md) | O que é protegido e como, e o que o Ponte não protege. |
 | [Aplicativo Android](docs/android.md) | Instalar, conectar, gestos e teclado; e, para quem mantém, estrutura, compilação e testes. |
 | [Operação](docs/operacao.md) | Publicar versões, cuidar do servidor, guardar as chaves, pendências conhecidas. |
+| [Serviço e conexão (1.15.0)](docs/SERVICO-E-CONEXAO-1.15.0.md) | Instalação opcional do serviço, retomada autenticada, reinício remoto, qualidade automática e limites da validação. |
 
 ## Como os computadores se encontram
 
@@ -43,8 +44,8 @@ diz quando o som dele está sendo transmitido. Não há modo oculto. O início m
 
 ## Limites conhecidos
 
-- O computador acessado precisa estar com o Ponte aberto e a sessão do Windows desbloqueada.
-- Tela de login, aviso do UAC e Ctrl+Alt+Del ficam de fora (exigiriam um serviço do Windows).
+- Sem o serviço opcional, o computador acessado precisa estar com o Ponte aberto e a sessão do Windows desbloqueada.
+- A versão 1.15.0 implementa um serviço para atender antes do login e no desktop protegido. Esses contextos precisam de validação operacional separada; veja o documento da versão. Ctrl+Alt+Del por atenção segura permanece fora do escopo.
 - Para controlar programas abertos como administrador, o Ponte de lá também precisa estar como administrador.
 
 ## Compilar

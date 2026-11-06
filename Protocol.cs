@@ -15,6 +15,7 @@ internal enum Msg : byte
     FileStart = 40, FileChunk = 41, FileEnd = 42,
     Settings = 50, VideoStart = 51, VideoData = 52, VideoStatus = 53, VideoFeedback = 54,
     Notice = 60,
+    Ping = 70, Pong = 71, Restart = 72, RestartResult = 73,
     Bye = 99,
 }
 
@@ -32,6 +33,9 @@ internal static class Caps
     public const int Video = 8;
     /// <summary>Só no AuthResult (1.14.0): o controlado é um celular. O texto vai pronto e há Voltar, Início e Apps (<see cref="PhoneKeys"/>).</summary>
     public const int Phone = 16;
+    public const int Management = 32;
+    /// <summary>Só no AuthResult (1.16.0): Settings com Screen = <see cref="ScreenInfo.All"/> transmite todas as telas numa imagem só.</summary>
+    public const int AllScreens = 64;
 }
 
 /// <summary>Teclas que um celular controlado entende como os botões dele (1.14.0).</summary>
@@ -46,7 +50,7 @@ internal static class PhoneKeys
 /// Key é a chave pública do visualizador (SPKI em base64); é por ela que o outro lado o reconhece nas próximas vezes.
 /// Caps nulo é um visualizador anterior à 1.5.0.
 /// </summary>
-internal sealed record HelloMsg(string Name, string User, string Version, string? Key = null, int? Caps = null);
+internal sealed record HelloMsg(string Name, string User, string Version, string? Key = null, int? Caps = null, bool Resume = false);
 /// <summary>Trusted avisa que a chave do visualizador já está autorizada: basta a assinatura, sem senha nem aceite.</summary>
 internal sealed record ChallengeMsg(bool HasPassword, string Salt, int Iterations, string Nonce, bool Trusted = false);
 /// <summary>
@@ -54,7 +58,12 @@ internal sealed record ChallengeMsg(bool HasPassword, string Salt, int Iteration
 /// Signature prova a posse da chave enviada no Hello; Remember pede para ficar autorizado depois de entrar com a senha.
 /// </summary>
 internal sealed record AuthResponseMsg(string? Proof, string? Signature = null, bool Remember = false);
-internal sealed record ScreenInfo(int Index, int Width, int Height, bool Primary);
+/// <summary>X e Y (1.16.0) são a posição da tela na área de trabalho de lá; antes vinham sempre zero.</summary>
+internal sealed record ScreenInfo(int Index, int Width, int Height, bool Primary, int X = 0, int Y = 0)
+{
+    /// <summary>O Screen do Settings que pede todas as telas juntas, com o tamanho da área de trabalho inteira.</summary>
+    public const int All = -1;
+}
 /// <summary>Paired diz ao visualizador que ele está na lista de autorizados do outro computador; Version é a versão do Ponte de lá.</summary>
 internal sealed record AuthResultMsg(bool Ok, string Reason, string HostName, ScreenInfo[] Screens, bool Paired = false, string Version = "", int Caps = 0);
 /// <summary>

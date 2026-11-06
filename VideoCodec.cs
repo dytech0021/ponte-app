@@ -79,6 +79,15 @@ internal sealed record VideoSource(string Name, Rectangle Bounds, int Adapter = 
         if (DisplayOutputs.Find(screen.DeviceName) is { Rotated: false } dxgi) yield return new VideoSource("DXGI", bounds, dxgi.Adapter, dxgi.Output);
         yield return new VideoSource("GDI", bounds);
     }
+
+    /// <summary>Todas as telas numa imagem só (1.16.0): o DXGI entrega uma saída por vez, então vai pelo GDI.</summary>
+    public static IEnumerable<VideoSource> AllScreens()
+    {
+        var bounds = SystemInformation.VirtualScreen;
+        bounds.Width &= ~1;
+        bounds.Height &= ~1;
+        yield return new VideoSource("GDI", bounds);
+    }
 }
 
 /// <summary>Em que placa e em que saída dela o DirectX enxerga cada tela, na mesma ordem que o FFmpeg usa.</summary>
@@ -155,7 +164,7 @@ internal static class VideoEncoder
     // A conversão de RGB para YUV é feita aqui, com a matriz BT.709 e faixa limitada declaradas, e o
     // decodificador desfaz com a mesma: as cores não dependem do que cada placa de vídeo supõe.
     internal static string Conversion(VideoOptions o, string encoder) =>
-        $"scale=out_color_matrix=bt709:out_range=tv,format={PixelFormat(o, encoder)}";
+        $"scale={(o.MaxHeight > 0 ? $"w=trunc(iw*min(1\\,{o.MaxHeight}/ih)/2)*2:h=trunc(ih*min(1\\,{o.MaxHeight}/ih)/2)*2:" : "")}out_color_matrix=bt709:out_range=tv,format={PixelFormat(o, encoder)}";
 
 
     internal static List<string> CodecArguments(VideoOptions options, string encoder)

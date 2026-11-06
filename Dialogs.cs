@@ -292,7 +292,7 @@ internal sealed class SettingsDialog : Form
     /// <param name="manageAutostart">Falso na cópia de desenvolvimento e nos perfis de teste, que não entram na inicialização do Windows.</param>
     public SettingsDialog(AppConfig config, bool manageAutostart)
     {
-        Ui.Prepare(this, "Configurações - Ponte", 440, 538);
+        Ui.Prepare(this, "Configurações - Ponte", 440, 632);
         Ui.Text(this, "Servidor de retransmissão (necessário para conectar por ID pela internet)", 16, 14, 408);
         var relay = new TextBox { Text = config.RelayServer, PlaceholderText = "exemplo.com:7412", Location = new Point(16, 38), Size = new Size(408, 23) };
         Controls.Add(relay);
@@ -307,6 +307,7 @@ internal sealed class SettingsDialog : Form
         Controls.Add(direct);
         Controls.Add(port);
         var elevated = new CheckBox { Text = "Abrir como administrador, para controlar programas abertos como administrador", Checked = config.RunElevated, Location = new Point(16, 164), Size = new Size(408, 38) };
+        if (WindowsHost.Owns(config)) { elevated.Checked = true; elevated.Enabled = false; }
         var update = new CheckBox { Text = "Atualizar o Ponte automaticamente", Checked = config.AutoUpdate, Location = new Point(16, 204), Size = new Size(408, 24) };
         var startup = new CheckBox { Text = "Iniciar o Ponte com o Windows, minimizado", Checked = config.StartWithWindows && manageAutostart,
             Enabled = manageAutostart, Location = new Point(16, 232), Size = new Size(408, 24) };
@@ -346,8 +347,29 @@ internal sealed class SettingsDialog : Form
         Controls.Add(theme);
         Ui.Text(this, "As mudanças valem na próxima vez que o Ponte for aberto.", 16, 462, 408).ForeColor = SystemColors.GrayText;
 
-        var save = Ui.Button(this, "Salvar", 236, 496, 90);
-        var cancel = Ui.Button(this, "Cancelar", 334, 496, 90, DialogResult.Cancel);
+        var reconnect = new CheckBox { Text = "Reconectar automaticamente após quedas de rede", Checked = config.AutoReconnect, Location = new Point(16, 488), Size = new Size(408, 24) };
+        var restart = new CheckBox { Text = "Permitir reinício remoto em sessões autenticadas", Checked = config.AllowRemoteRestart, Location = new Point(16, 514), Size = new Size(408, 24) };
+        Controls.Add(reconnect); Controls.Add(restart);
+        var service = Ui.Button(this, WindowsHost.Owns(config) ? "Serviço do Windows: instalado..." : "Serviço: acesso antes do login...", 16, 544, 408);
+        service.Click += (_, _) =>
+        {
+            bool installed = WindowsHost.Owns(config);
+            string action = installed ? "Remover o serviço do Ponte? O acesso antes do login deixará de funcionar." :
+                "Instalar o serviço do Ponte? Computadores já autorizados e quem tem a senha poderão acessar antes do login e na tela bloqueada. Não haverá aceite automático para desconhecidos.\n\nRequer administrador. Feche e reabra o Ponte após a instalação.";
+            if (MessageBox.Show(this, action, "Serviço do Windows", MessageBoxButtons.YesNo, MessageBoxIcon.Question) != DialogResult.Yes) return;
+            try
+            {
+                if (installed) WindowsHost.Remove(config); else WindowsHost.Install(config);
+                if (!installed && manageAutostart) Autostart.Apply(config);
+                service.Text = WindowsHost.Owns(config) ? "Serviço do Windows: instalado..." : "Serviço: acesso antes do login...";
+                elevated.Enabled = !WindowsHost.Owns(config);
+                if (!elevated.Enabled) elevated.Checked = true;
+                MessageBox.Show(this, "Concluído. Feche pelo ícone na bandeja e reabra o Ponte para aplicar.", "Ponte");
+            }
+            catch (Exception ex) when (ex is PonteException or IOException or UnauthorizedAccessException or System.ComponentModel.Win32Exception) { MessageBox.Show(this, ex.Message, "Ponte", MessageBoxButtons.OK, MessageBoxIcon.Warning); }
+        };
+        var save = Ui.Button(this, "Salvar", 236, 590, 90);
+        var cancel = Ui.Button(this, "Cancelar", 334, 590, 90, DialogResult.Cancel);
         AcceptButton = save;
         CancelButton = cancel;
         save.Click += (_, _) =>
@@ -358,6 +380,8 @@ internal sealed class SettingsDialog : Form
             config.ListenPort = (int)port.Value;
             config.RunElevated = elevated.Checked;
             config.AutoUpdate = update.Checked;
+            config.AutoReconnect = reconnect.Checked;
+            config.AllowRemoteRestart = restart.Checked;
             if (manageAutostart) {
                 config.StartWithWindows = startup.Checked;
                 Autostart.Apply(config);

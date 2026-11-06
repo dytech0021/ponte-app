@@ -84,14 +84,46 @@ internal sealed class RemoteView : Control
     /// A posição que vai na mensagem de mouse para um ponto da área de tamanho <paramref name="view"/> que
     /// mostra uma tela remota de <paramref name="w"/> por <paramref name="h"/> pixels.
     /// </summary>
-    public static (int X, int Y) ToRemote(Point p, Size view, int w, int h)
+    public static (int X, int Y) ToRemote(Point p, Size view, int w, int h) => ToRemote(p, view, w, h, new Rectangle(0, 0, w, h));
+
+    /// <param name="source">O pedaço da imagem de <paramref name="w"/> por <paramref name="h"/> que a área mostra (com uma janela por tela, o daquela tela).</param>
+    public static (int X, int Y) ToRemote(Point p, Size view, int w, int h, Rectangle source)
     {
-        var dest = Fit(view, w, h);
+        var dest = Fit(view, source.Width, source.Height);
         // Primeiro o pixel de lá que está debaixo do ponteiro daqui (pelo centro do pixel daqui); depois a
         // escala de 0 a 65535 da mensagem, arredondada, que o outro lado desfaz sem perder o pixel.
-        int px = Math.Clamp((int)Math.Floor((p.X - dest.X + 0.5) * w / dest.Width), 0, w - 1);
-        int py = Math.Clamp((int)Math.Floor((p.Y - dest.Y + 0.5) * h / dest.Height), 0, h - 1);
+        int px = source.X + Math.Clamp((int)Math.Floor((p.X - dest.X + 0.5) * source.Width / dest.Width), 0, source.Width - 1);
+        int py = source.Y + Math.Clamp((int)Math.Floor((p.Y - dest.Y + 0.5) * source.Height / dest.Height), 0, source.Height - 1);
         return ((int)Math.Round(px * 65535.0 / Math.Max(1, w - 1)), (int)Math.Round(py * 65535.0 / Math.Max(1, h - 1)));
+    }
+
+    private RectangleF _crop = new(0, 0, 1, 1);
+    private double _cropAspect;
+
+    /// <summary>
+    /// Mostra só um pedaço da imagem, em frações dela: com todas as telas numa imagem só, o de uma tela. O recorte só
+    /// vale quando a imagem tem a proporção <paramref name="wholeAspect"/> da área de trabalho inteira; até ela chegar,
+    /// a área mostra a imagem que houver.
+    /// </summary>
+    public void SetCrop(RectangleF crop, double wholeAspect)
+    {
+        _crop = crop;
+        _cropAspect = wholeAspect;
+        Invalidate();
+    }
+
+    public void ClearCrop() => SetCrop(new RectangleF(0, 0, 1, 1), 0);
+
+    /// <summary>O pedaço da imagem de <paramref name="w"/> por <paramref name="h"/> pixels que esta área mostra.</summary>
+    public Rectangle Source(int w, int h) => Source(_crop, _cropAspect, w, h);
+
+    /// <summary>O mesmo cálculo sem precisar de um controle (o autoteste roda fora da linha de execução das janelas).</summary>
+    public static Rectangle Source(RectangleF crop, double wholeAspect, int w, int h)
+    {
+        if (wholeAspect <= 0 || Math.Abs(w / (double)h / wholeAspect - 1) > 0.02) return new Rectangle(0, 0, w, h);
+        int left = Math.Clamp((int)Math.Round(crop.Left * w), 0, w - 1), top = Math.Clamp((int)Math.Round(crop.Top * h), 0, h - 1);
+        int right = Math.Clamp((int)Math.Round(crop.Right * w), left + 1, w), bottom = Math.Clamp((int)Math.Round(crop.Bottom * h), top + 1, h);
+        return Rectangle.FromLTRB(left, top, right, bottom);
     }
 
     protected override void OnPaint(PaintEventArgs e)
@@ -106,10 +138,12 @@ internal sealed class RemoteView : Control
                 return;
             }
             long start = Stopwatch.GetTimestamp();
-            var dest = Fit(canvas.Width, canvas.Height);
-            e.Graphics.InterpolationMode = dest.Width == canvas.Width ? InterpolationMode.NearestNeighbor : InterpolationMode.Bilinear;
+            var source = Source(canvas.Width, canvas.Height);
+            var dest = Fit(source.Width, source.Height);
+            e.Graphics.InterpolationMode = dest.Width == source.Width ? InterpolationMode.NearestNeighbor : InterpolationMode.Bilinear;
             e.Graphics.PixelOffsetMode = PixelOffsetMode.Half;
-            e.Graphics.DrawImage(canvas, dest);
+            if (source.Size == canvas.Size) e.Graphics.DrawImage(canvas, dest);
+            else e.Graphics.DrawImage(canvas, dest, source, GraphicsUnit.Pixel);
             PaintTicks += Stopwatch.GetTimestamp() - start;
             Paints++;
         }
@@ -125,7 +159,7 @@ internal sealed class RemoteView : Control
             w = _session.Canvas.Width;
             h = _session.Canvas.Height;
         }
-        (nx, ny) = ToRemote(p, ClientSize, w, h);
+        (nx, ny) = ToRemote(p, ClientSize, w, h, Source(w, h));
         return true;
     }
 
@@ -228,6 +262,9 @@ internal sealed class RemoteView : Control
 /// <summary>Janela da sessão: a tela remota e a barra com os comandos.</summary>
 internal sealed class ViewerForm : Form
 {
+    private readonly AutomaticQuality _automaticQuality = new();
+    private readonly ToolStripMenuItem _automaticQualityItem;
+    private int _qualityTicks;
     private readonly ViewerSession _session;
     private readonly RemoteView _view;
     private readonly ToolStripStatusLabel _status = new() { Spring = true, TextAlign = ContentAlignment.MiddleLeft };
@@ -298,8 +335,17 @@ internal sealed class ViewerForm : Form
         foreach (var s in session.Screens)
         {
             int index = s.Index;
-            screens.DropDownItems.Add($"Tela {s.Index + 1}  ({s.Width} x {s.Height}){(s.Primary ? "  principal" : "")}", null, (_, _) => { _screen = index; Apply(); });
+            screens.DropDownItems.Add($"Tela {s.Index + 1}  ({s.Width} x {s.Height}){(s.Primary ? "  principal" : "")}", null, (_, _) => ShowScreen(index));
         }
+        _eachWindow = new ToolStripMenuItem("Cada tela em uma janela")
+        {
+            Enabled = session.HostHasAllScreens,
+            ToolTipText = session.HostHasAllScreens ? "Abre as outras telas em janelas separadas, que podem ter qualquer tamanho; esta janela fica com a tela atual"
+                : "Atualize o Ponte no outro computador (1.16.0 ou mais nova) para abrir cada tela em uma janela",
+        };
+        _eachWindow.Click += (_, _) => { if (_allScreens) ShowScreen(_screen); else OpenScreenWindows(); };
+        screens.DropDownItems.Add(new ToolStripSeparator());
+        screens.DropDownItems.Add(_eachWindow);
         // Perfis: escolher um aplica a qualidade e o vídeo dele; mudar a qualidade ou o vídeo muda o perfil em uso.
         _profileButton = new ToolStripDropDownButton { ToolTipText = "Perfil de transmissão: o que for mudado nele fica guardado para as próximas conexões" };
         foreach (var (key, name) in StreamProfile.All)
@@ -313,6 +359,16 @@ internal sealed class ViewerForm : Form
         _restoreProfile.Click += (_, _) => RestoreProfile();
         _profileButton.DropDownItems.AddRange(new ToolStripItem[] { new ToolStripSeparator(), _restoreProfile });
         var quality = new ToolStripDropDownButton("Qualidade");
+        _automaticQualityItem = new ToolStripMenuItem("Ajustar automaticamente à conexão") { CheckOnClick = true,
+            Checked = config?.AutomaticQuality == true && session.HostHasManagement, Enabled = session.HostHasManagement };
+        _automaticQualityItem.CheckedChanged += (_, _) =>
+        {
+            _automaticQuality.Reset();
+            if (_config is not null) { _config.AutomaticQuality = _automaticQualityItem.Checked; _config.Save(); }
+            Apply();
+        };
+        quality.DropDownItems.Add(_automaticQualityItem);
+        quality.DropDownItems.Add(new ToolStripSeparator());
         foreach (var (name, value) in new[] { ("Baixa (mais rápida)", 35), ("Média", 60), ("Alta", 85) })
         {
             var item = new ToolStripMenuItem(name);
@@ -360,6 +416,15 @@ internal sealed class ViewerForm : Form
         keys.DropDownItems.Add("Windows + D (Área de trabalho)", null, (_, _) => _view.SendCombo(0x5B, 0x44));
         keys.DropDownItems.Add("Ctrl + Shift + Esc (Gerenciador de Tarefas)", null, (_, _) => _view.SendCombo(0x11, 0x10, 0x1B));
         keys.DropDownItems.Add("Print Screen", null, (_, _) => _view.SendCombo(0x2C));
+        var restart = new ToolStripMenuItem("Reiniciar computador remoto...") { Enabled = session.HostHasManagement && !session.HostIsPhone };
+        restart.Click += async (_, _) =>
+        {
+            string reconnect = session.CanReconnect ? "O Ponte tentará reconectar por até dez minutos." : "Será necessário conectar e autorizar novamente.";
+            if (MessageBox.Show(this, $"Reiniciar {session.HostName}? Salve os arquivos abertos antes.\n\n{reconnect}\nPara voltar antes do login, o serviço do Ponte precisa estar instalado lá.", "Reiniciar computador remoto", MessageBoxButtons.YesNo, MessageBoxIcon.Warning) != DialogResult.Yes) return;
+            try { await session.RequestRestartAsync(); }
+            catch (Exception ex) when (ex is PonteException or IOException or OperationCanceledException) { _status.Text = ex.Message; }
+        };
+        keys.DropDownItems.Add(new ToolStripSeparator()); keys.DropDownItems.Add(restart);
 
         var full = new ToolStripButton("Tela cheia") { DisplayStyle = ToolStripItemDisplayStyle.Text };
         full.Click += (_, _) => ToggleFullScreen(full);
@@ -419,6 +484,8 @@ internal sealed class ViewerForm : Form
         session.FrameUpdated += _view.RequestRepaint;
         session.VideoStatusChanged += OnVideoStatusChanged;
         session.Closed += OnSessionClosed;
+        session.ConnectionStatusChanged += text => Post(() => { _status.Text = text; _player.Silence(); });
+        session.Reconnected += () => Post(() => { _automaticQuality.Reset(); _view.RequestRepaint(); Apply(); });
         session.FileReceived += path => Post(() => _status.Text = $"Arquivo recebido: {path}");
         session.Notice += text => Post(() => _status.Text = text);
         session.PointerChanged += payload => Post(() => _view.SetPointer(payload));
@@ -457,7 +524,78 @@ internal sealed class ViewerForm : Form
             video = video with { Codec = "jpeg" };
             PrepareVideoRuntime();
         }
-        _ = _session.SendSettingsAsync(_screen, _quality, _playing, _session.HostHasVideo ? video : null, _config?.ViewerIdleMinutes * 60);
+        int quality = _quality;
+        if (_automaticQualityItem.Checked) (quality, video) = _automaticQuality.Apply(quality, video);
+        _ = _session.SendSettingsAsync(_allScreens ? ScreenInfo.All : _screen, quality, _playing, _session.HostHasVideo ? video : null, _config?.ViewerIdleMinutes * 60);
+    }
+
+    // ---------- cada tela em uma janela ----------
+
+    private readonly ToolStripMenuItem _eachWindow;
+    private readonly List<ScreenWindow> _screenWindows = new();
+    // Com todas as telas numa imagem só, esta janela mostra a tela _screen e cada uma das outras ganha uma ScreenWindow.
+    private bool _allScreens;
+
+    private void ShowScreen(int index)
+    {
+        CloseScreenWindows();
+        _screen = index;
+        Apply();
+    }
+
+    private void OpenScreenWindows()
+    {
+        var screens = _session.Screens;
+        if (_allScreens || _closing || !_session.HostHasAllScreens || screens.Length < 2) return;
+        // A imagem que chega é a área de trabalho inteira de lá; cada janela mostra o retângulo de uma tela dentro dela.
+        int left = screens.Min(s => s.X), top = screens.Min(s => s.Y);
+        int width = screens.Max(s => s.X + s.Width) - left, height = screens.Max(s => s.Y + s.Height) - top;
+        double aspect = width / (double)height;
+        RectangleF Crop(ScreenInfo s) => new((s.X - left) / (float)width, (s.Y - top) / (float)height, s.Width / (float)width, s.Height / (float)height);
+
+        _screen = Math.Clamp(_screen, 0, screens.Length - 1);
+        _allScreens = true;
+        _eachWindow.Checked = true;
+        _view.SetCrop(Crop(screens[_screen]), aspect);
+        Text = $"{_session.HostName} ({_session.Target}) - Tela {_screen + 1} - Ponte {Updater.Current}";
+
+        // Com mais de um monitor aqui, cada janela vai para um monitor que esta não ocupa; com um só, ficam em cascata.
+        var spare = Screen.AllScreens.Where(s => !s.Bounds.IntersectsWith(Bounds)).ToList();
+        int cascade = 0;
+        foreach (var s in screens.Where(s => s.Index != _screen))
+        {
+            var window = new ScreenWindow(_session, Crop(s), aspect, $"{_session.HostName} - Tela {s.Index + 1} ({s.Width} x {s.Height}) - Ponte");
+            var area = spare.Count > 0 ? spare[0].WorkingArea : Screen.FromControl(this).WorkingArea;
+            if (spare.Count > 0) spare.RemoveAt(0);
+            var client = RemoteView.Fit(new Size(area.Width * 7 / 10, area.Height * 7 / 10), s.Width, s.Height).Size;
+            window.StartPosition = FormStartPosition.Manual;
+            window.ClientSize = client;
+            window.Location = new Point(area.X + (area.Width - window.Width) / 2 + cascade * 32, area.Y + (area.Height - window.Height) / 2 + cascade * 32);
+            if (area == Screen.FromControl(this).WorkingArea) cascade++;
+            window.FormClosed += (_, _) =>
+            {
+                _screenWindows.Remove(window);
+                // Fechou a última: volta a mandar só a tela desta janela, que é menos imagem pela rede.
+                if (_allScreens && _screenWindows.Count == 0 && !_closing) ShowScreen(_screen);
+            };
+            _screenWindows.Add(window);
+            window.Show();
+        }
+        Apply();
+    }
+
+    private void CloseScreenWindows()
+    {
+        if (!_allScreens) return;
+        _allScreens = false;
+        _eachWindow.Checked = false;
+        if (!_closing)
+        {
+            _view.ClearCrop();
+            Text = $"{_session.HostName} ({_session.Target}) - Ponte {Updater.Current}";
+        }
+        foreach (var window in _screenWindows.ToArray()) window.Close();
+        _screenWindows.Clear();
     }
 
     private void PrepareVideoRuntime()
@@ -591,6 +729,7 @@ internal sealed class ViewerForm : Form
 
     private void UpdateStats()
     {
+        _ = _session.PingAsync();
         // A miniatura da lista de computadores: logo que a tela aparece e, depois, de minuto em minuto.
         if (_thumbnail is not null && (!_hasThumbnail || ++_seconds % 60 == 0) && _session.SaveThumbnail(_thumbnail) && !_hasThumbnail)
         {
@@ -606,6 +745,8 @@ internal sealed class ViewerForm : Form
         double paintMs = paints > _lastPaints ? (paintTicks - _lastPaintTicks) * 1000.0 / Stopwatch.Frequency / (paints - _lastPaints) : 0;
         _performanceText = $"{size}{(frames - _lastFrames) / elapsed:N0} FPS recebidos, {drawn:N0} na tela   {(bytes - _lastBytes) * 8 / (1000.0 * elapsed):N0} kbit/s";
         PaintMilliseconds = paintMs;
+        if (++_qualityTicks % 2 == 0 && _automaticQualityItem.Checked && !_session.Reconnecting &&
+            _automaticQuality.Observe(_session.RoundTripMilliseconds, paintMs)) Apply();
         _lastPaints = paints;
         _lastPaintTicks = paintTicks;
         _videoStatusText = _session.VideoStatus;
@@ -721,6 +862,7 @@ internal sealed class ViewerForm : Form
     protected override void OnFormClosed(FormClosedEventArgs e)
     {
         _closing = true;
+        CloseScreenWindows();
         _closed.Cancel();
         _timer.Dispose();
         _reveal.Dispose();
@@ -730,6 +872,46 @@ internal sealed class ViewerForm : Form
         _session.FrameUpdated -= _view.RequestRepaint;
         _session.VideoStatusChanged -= OnVideoStatusChanged;
         _ = _session.DisposeAsync().AsTask();
+        base.OnFormClosed(e);
+    }
+}
+
+/// <summary>
+/// Uma das outras telas do computador acessado, em "Cada tela em uma janela": só a imagem daquela tela, numa janela
+/// de qualquer tamanho. Mouse e teclado vão pela mesma sessão da janela principal.
+/// </summary>
+internal sealed class ScreenWindow : Form
+{
+    private readonly ViewerSession _session;
+    private readonly RemoteView _view;
+
+    public ScreenWindow(ViewerSession session, RectangleF crop, double wholeAspect, string title)
+    {
+        _session = session;
+        AutoScaleDimensions = new SizeF(7F, 15F);
+        AutoScaleMode = AutoScaleMode.Font;
+        Text = title;
+        Icon = Ui.MakeIcon();
+        MinimumSize = new Size(160, 120);
+        _view = new RemoteView(session) { Dock = DockStyle.Fill };
+        _view.SetCrop(crop, wholeAspect);
+        Controls.Add(_view);
+        session.FrameUpdated += _view.RequestRepaint;
+        session.PointerChanged += OnPointerChanged;
+        Shown += (_, _) => _view.Focus();
+    }
+
+    private void OnPointerChanged(byte[] payload)
+    {
+        if (IsDisposed || !IsHandleCreated) return;
+        try { BeginInvoke(() => _view.SetPointer(payload)); }
+        catch (InvalidOperationException) { }
+    }
+
+    protected override void OnFormClosed(FormClosedEventArgs e)
+    {
+        _session.FrameUpdated -= _view.RequestRepaint;
+        _session.PointerChanged -= OnPointerChanged;
         base.OnFormClosed(e);
     }
 }

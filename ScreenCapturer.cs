@@ -13,11 +13,15 @@ internal sealed class ScreenCapturer : IDisposable
     private static readonly ImageCodecInfo JpegCodec = ImageCodecInfo.GetImageEncoders().First(c => c.FormatID == ImageFormat.Jpeg.Guid);
 
     private Bitmap? _current, _previous;
+    private string? _desktopName;
 
     /// <summary>Quadro pronto para enviar, ou null se nada mudou.</summary>
-    public unsafe byte[]? Capture(Rectangle bounds, int quality, bool forceFull, bool chroma444 = false)
+    public unsafe byte[]? Capture(Rectangle bounds, int quality, bool forceFull, bool chroma444 = false, int maxHeight = 0)
     {
-        int w = bounds.Width, h = bounds.Height;
+        using var desktop = DesktopAccess.Enter();
+        if (desktop is not null && desktop.Name != _desktopName) { _desktopName = desktop.Name; forceFull = true; }
+        var size = maxHeight > 0 ? new VideoOptions(MaxHeight: maxHeight).Size(bounds.Width, bounds.Height) : (bounds.Width, bounds.Height);
+        int w = size.Item1, h = size.Item2;
         if (_current is null || _current.Width != w || _current.Height != h)
         {
             Dispose();
@@ -27,7 +31,15 @@ internal sealed class ScreenCapturer : IDisposable
         }
 
         using (var g = Graphics.FromImage(_current))
-            g.CopyFromScreen(bounds.Location, Point.Empty, bounds.Size, CopyPixelOperation.SourceCopy);
+        {
+            if (w == bounds.Width && h == bounds.Height) g.CopyFromScreen(bounds.Location, Point.Empty, bounds.Size, CopyPixelOperation.SourceCopy);
+            else
+            {
+                using var original = new Bitmap(bounds.Width, bounds.Height, PixelFormat.Format32bppRgb);
+                using (var source = Graphics.FromImage(original)) source.CopyFromScreen(bounds.Location, Point.Empty, bounds.Size, CopyPixelOperation.SourceCopy);
+                g.DrawImage(original, new Rectangle(0, 0, w, h));
+            }
+        }
 
         var full = new Rectangle(0, 0, w, h);
         var rects = new List<Rectangle>();
@@ -161,7 +173,11 @@ internal static class InputInjector
     /// </summary>
     public static bool LastBlocked { get; private set; }
 
-    private static void Send(Native.INPUT input) => LastBlocked = Native.SendInput(1, new[] { input }, InputSize) == 0;
+    private static void Send(Native.INPUT input)
+    {
+        try { using var desktop = DesktopAccess.Enter(); LastBlocked = Native.SendInput(1, new[] { input }, InputSize) == 0; }
+        catch (System.ComponentModel.Win32Exception) { LastBlocked = true; }
+    }
 
     /// <param name="nx">Posição horizontal de 0 a 65535 dentro da tela escolhida.</param>
     /// <param name="action">0 mover; 1/2 esquerdo; 3/4 direito; 5/6 meio (aperta/solta); 7 roda; 8 roda horizontal.</param>
@@ -223,6 +239,7 @@ internal static class InputInjector
     /// </summary>
     public static void Text(string text)
     {
+        using var desktop = DesktopAccess.Enter();
         var inputs = new List<Native.INPUT>(text.Length * 2);
         foreach (char c in text)
         {

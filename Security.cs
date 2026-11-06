@@ -140,6 +140,22 @@ internal sealed class AppConfig
     /// <summary>Abrir como administrador quando a conta permitir, para conseguir controlar programas elevados.</summary>
     public bool RunElevated { get; set; } = true;
     public bool AutoUpdate { get; set; } = true;
+    public bool AutoReconnect { get; set; } = true;
+    public bool AutomaticQuality { get; set; }
+    public bool AllowRemoteRestart { get; set; } = true;
+    public Dictionary<string, DateTime> BlockedResumes { get; set; } = new();
+    public void BlockResume(string keyHash)
+    {
+        if (keyHash.Length == 0) return;
+        lock (_gate)
+        {
+            foreach (string old in BlockedResumes.Where(p => p.Value <= DateTime.UtcNow).Select(p => p.Key).ToArray()) BlockedResumes.Remove(old);
+            if (BlockedResumes.Count < 100) BlockedResumes[keyHash] = DateTime.UtcNow.AddMinutes(11);
+            Save();
+        }
+    }
+    public bool ResumeBlocked(string hash) { lock (_gate) return BlockedResumes.TryGetValue(hash, out var until) && until > DateTime.UtcNow; }
+    public void ClearResumeBlock(string hash) { lock (_gate) if (BlockedResumes.Remove(hash)) Save(); }
     /// <summary>Abrir o Ponte quando o usuário entra no Windows, para o computador ficar acessível depois de reiniciar.</summary>
     public bool StartWithWindows { get; set; } = true;
     /// <summary>"auto" acompanha o tema do Windows; "claro" e "escuro" fixam.</summary>
@@ -205,7 +221,7 @@ internal sealed class AppConfig
         }
     }
 
-    public static AppConfig Load(string? dir)
+    public static AppConfig Load(string? dir, bool machine = false)
     {
         dir ??= DefaultDir;
         Directory.CreateDirectory(dir);
@@ -225,11 +241,12 @@ internal sealed class AppConfig
         byte[]? pfx = null;
         if (config.CertPfx.Length > 0)
         {
-            try { pfx = ProtectedData.Unprotect(Convert.FromBase64String(config.CertPfx), null, DataProtectionScope.CurrentUser); }
+            try { pfx = ProtectedData.Unprotect(Convert.FromBase64String(config.CertPfx), null, machine ? DataProtectionScope.LocalMachine : DataProtectionScope.CurrentUser); }
             catch (Exception ex) when (ex is CryptographicException or FormatException) { }
         }
         if (pfx is null)
         {
+            if (machine) throw new CryptographicException("Identidade do serviço indisponível. Reinstale pelo perfil original; o serviço não cria outro ID.");
             // Sem chave legível (primeira execução ou perfil copiado de outra conta): nasce um ID novo.
             // Se havia uma chave que esta conta não consegue abrir, a configuração antiga fica guardada.
             if (config.CertPfx.Length > 0 && File.Exists(path)) File.Copy(path, path + ".outra-conta", true);
@@ -254,6 +271,7 @@ internal sealed class AppConfig
             string temp = FilePath + ".tmp";
             File.WriteAllText(temp, JsonSerializer.Serialize(this, new JsonSerializerOptions { WriteIndented = true }));
             File.Move(temp, FilePath, true);
+            WindowsHost.Export(this);
         }
     }
 

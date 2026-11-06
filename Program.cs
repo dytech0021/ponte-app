@@ -28,6 +28,11 @@ internal static class Program
         // antigo está parada esperando este teste terminar, e no modo escuro do Windows um ficava esperando o outro:
         // a atualização falhava sempre ("não respondeu ao teste de partida").
         if (args.Contains("--verificar")) return 0;
+        if (args.Contains("--servico")) return WindowsHost.RunService();
+        if (args.Contains("--agente-servico")) return WindowsHost.RunAgent();
+        if (args.Contains("--aviso-servico")) return int.TryParse(Arg(args,"--aviso-servico"), out int parentPid) && parentPid > 0 ? WindowsHost.RunNotice(parentPid) : 1;
+        if (Arg(args, "--autoteste-ciclo") is { } lifecycle) return Task.Run(() => LifecycleSelfTest.RunAsync(lifecycle)).GetAwaiter().GetResult();
+        if (Arg(args, "--autoteste-servico") is { } serviceTest) return Task.Run(() => ServiceSelfTest.RunAsync(serviceTest)).GetAwaiter().GetResult();
 
         ApplicationConfiguration.Initialize();
         if ((Arg(args, "--autoteste") ?? Arg(args, "--demo") ?? Arg(args, "--captura-ui")) is { } outputDir)
@@ -97,6 +102,13 @@ internal static class Program
         if (Arg(args, "--demo") is { } demoDir) return Demo(demoDir, args);
 
         var config = AppConfig.Load(Arg(args, "--perfil"));
+        if (WindowsHost.Owns(config) && !Elevation.IsElevated)
+        {
+            if (args.Contains(Autostart.Argument)) return 0;
+            MessageBox.Show("O serviço do Ponte está instalado. Abra o Ponte como administrador para gerenciar o mesmo host e suas autorizações.", "Ponte", MessageBoxButtons.OK, MessageBoxIcon.Information);
+            return 1;
+        }
+        WindowsHost.RefreshBinary(config);
         // Um perfil à parte (testes) anota as sessões na pasta dele, sem misturar com as do Ponte de uso.
         if (Arg(args, "--perfil") is not null) SessionLog.Folder = config.Dir;
 
@@ -150,7 +162,7 @@ internal static class Program
                     dialog.Close();
                     dialog.Dispose();
                 }
-                form.Close();
+                form.ExitApplication();
             };
         }
         Application.Run(form);

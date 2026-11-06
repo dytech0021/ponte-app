@@ -5,16 +5,22 @@ namespace Ponte;
 /// não conhece estas opções (Ponte anterior à 1.6 e o aplicativo do celular) nunca recebe vídeo.
 /// </summary>
 internal sealed record VideoOptions(int Fps = 20, string Codec = "jpeg", bool Chroma444 = false,
-    bool UltraLowLatency = false, int BitrateMbps = 20)
+    bool UltraLowLatency = false, int BitrateMbps = 20, int MaxHeight = 0)
 {
     public VideoOptions Normalize() => this with
     {
         Fps = Fps is 20 or 30 or 60 or 120 ? Fps : 20,
         Codec = Codec is "h264" or "h265" ? Codec : "jpeg",
-        BitrateMbps = Math.Clamp(BitrateMbps, 5, 100),
+        BitrateMbps = Math.Clamp(BitrateMbps, 1, 100),
+        MaxHeight = MaxHeight is 480 or 720 or 900 or 1080 ? MaxHeight : 0,
     };
 
     public static string CodecName(string codec) => codec switch { "h264" => "H.264", "h265" => "H.265", _ => "JPEG" };
+    public (int Width, int Height) Size(int width, int height)
+    {
+        double scale = MaxHeight > 0 ? Math.Min(1, MaxHeight / (double)height) : 1;
+        return (Math.Max(2, (int)(width * scale) & ~1), Math.Max(2, (int)(height * scale) & ~1));
+    }
 }
 
 /// <summary>
