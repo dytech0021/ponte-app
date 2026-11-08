@@ -28,12 +28,14 @@ class MiniaturasUiTest {
     @Before fun prepara() {
         context.getSharedPreferences("ponte", 0).edit().clear().commit()
         DeviceIdentity.replacement = Apoio.identidade()
+        Apoio.contaLiberada(context)
         UpdateFlow.automatic = false
         // Ninguém online por padrão: os testes de tela não falam com o servidor de verdade.
         MainActivity.presenceSource = { _, _, _ -> emptyMap() }
     }
 
     @After fun desfaz() {
+        Apoio.semConta(context)
         DeviceIdentity.replacement = null
         MainActivity.presenceSource = { server, key, targets -> ponte.core.Presence.check(server, key, targets) }
     }

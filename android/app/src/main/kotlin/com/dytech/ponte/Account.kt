@@ -236,6 +236,12 @@ class Account private constructor(val email: String, val userId: String, private
         )
     }
 
+    /** Token de acesso atual (renovado se preciso), para o servidor do Ponte conferir a conta. Bloqueante. */
+    fun accessToken(): String {
+        ensureAccess()
+        return access
+    }
+
     @Synchronized
     private fun ensureAccess() {
         if (System.currentTimeMillis() < expires && access.isNotEmpty()) return

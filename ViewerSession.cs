@@ -19,6 +19,10 @@ internal sealed class ViewerSession : IAsyncDisposable
     public bool HostHasManagement { get; }
     /// <summary>O outro computador manda todas as telas numa imagem só, para abrir uma janela por tela (1.16.0 em diante).</summary>
     public bool HostHasAllScreens { get; }
+    /// <summary>1.17.0: o outro lado faz Ctrl+Alt+Del de verdade (pelo serviço dele, se instalado).</summary>
+    public bool HostHasSecureAttention { get; }
+    /// <summary>A conta liberada em que o outro aparelho está (do bilhete dele).</summary>
+    public string HostAccount { get; private init; } = "";
     public double RoundTripMilliseconds { get; private set; }
     public event Action<string>? ConnectionStatusChanged;
     public event Action? Reconnected;
@@ -85,6 +89,7 @@ internal sealed class ViewerSession : IAsyncDisposable
         HostHasVideo = (result.Caps & Caps.Video) != 0;
         HostIsPhone = (result.Caps & Caps.Phone) != 0;
         HostHasAllScreens = (result.Caps & Caps.AllScreens) != 0;
+        HostHasSecureAttention = (result.Caps & Caps.SecureAttention) != 0;
         HostName = result.HostName;
         Screens = result.Screens;
         Fingerprint = fingerprint;
@@ -98,6 +103,8 @@ internal sealed class ViewerSession : IAsyncDisposable
         Func<Task<bool>> confirmNewIdentity, string receiveDir, CancellationToken ct, bool retrying = false)
     {
         var (key, shown) = AppConfig.Target(target);
+        // 1.17.0: só quem está numa conta liberada acessa (o bilhete prova isso para o outro lado).
+        if (!Ticket.Valid(config)) throw new PonteException("Para acessar outro aparelho, entre numa conta liberada do Ponte (botão Conta).");
 
         var (ssl, remote) = await Transport.ConnectAsync(config, target, ct);
         var channel = new Channel(ssl);
@@ -114,8 +121,15 @@ internal sealed class ViewerSession : IAsyncDisposable
             handshake.CancelAfter(TimeSpan.FromSeconds(20));
             string ownKey = Convert.ToBase64String(config.Certificate.PublicKey.ExportSubjectPublicKeyInfo());
             await channel.SendJsonAsync(Msg.Hello, new HelloMsg(Environment.MachineName, Environment.UserName, Updater.Current.ToString(), ownKey,
-                Caps.Files | Caps.Cursor | Caps.Audio | Caps.Video, Resume: retrying), handshake.Token);
+                Caps.Files | Caps.Cursor | Caps.Audio | Caps.Video, Resume: retrying, Ticket: config.Ticket), handshake.Token);
             var challenge = await channel.ExpectAsync<ChallengeMsg>(Msg.Challenge, handshake.Token);
+            // O outro lado também precisa estar numa conta liberada. Sem bilhete, ele é anterior à 1.17.0 (e responder
+            // sem senha abriria um pedido de aceite lá) ou ninguém entrou na conta nele: para aqui mesmo.
+            string? hostAccount = Ticket.Verify(challenge.Ticket, Security.KeyHash(remote.PublicKey.ExportSubjectPublicKeyInfo()), out string ticketProblem);
+            if (hostAccount is null)
+                throw new PonteException(challenge.Ticket is null
+                    ? "O outro aparelho não está numa conta liberada do Ponte (ou ainda não tem a versão 1.17.0). Alguém precisa abrir o Ponte nele, atualizar e entrar na conta."
+                    : $"O outro aparelho mandou um bilhete de conta que não vale ({ticketProblem}). Alguém precisa sair e entrar de novo na conta nele.");
             byte[] nonce = Convert.FromBase64String(challenge.Nonce), remoteHash = Security.CertificateHash(remote);
             if (nonce.Length != 32) throw new PonteException("O outro computador enviou um desafio inválido.");
             // A assinatura vai sempre: é ela que deixa o outro lado reconhecer este computador, agora ou numa próxima vez.
@@ -153,7 +167,7 @@ internal sealed class ViewerSession : IAsyncDisposable
 
             channel.Limit = Channel.MaxPayload;
             config.RecordConnection(key, shown, result.HostName, fingerprint, result.Paired);
-            var connected = new ViewerSession(channel, key, shown, result, fingerprint, receiveDir);
+            var connected = new ViewerSession(channel, key, shown, result, fingerprint, receiveDir) { HostAccount = hostAccount };
             if (config.AutoReconnect && connected.HostHasManagement && (result.Paired || !string.IsNullOrEmpty(reconnectPassword)))
                 connected._reconnect = token => ConnectAsync(config, target, () => Task.FromResult(reconnectPassword),
                     () => Task.FromResult(false), receiveDir, token, retrying: true);
@@ -412,6 +426,9 @@ internal sealed class ViewerSession : IAsyncDisposable
         BitConverter.TryWriteBytes(p.AsSpan(5), (short)Math.Clamp(wheel, short.MinValue, short.MaxValue));
         return Quiet(_channel.SendAsync(Msg.Mouse, p, _stop.Token));
     }
+
+    /// <summary>Ctrl+Alt+Del de verdade no outro computador (1.17.0). Se não der, a resposta chega como aviso.</summary>
+    public Task SendSecureAttentionAsync() => Quiet(_channel.SendAsync(Msg.SecureAttention, default, _stop.Token));
 
     public Task SendKeyAsync(int virtualKey, bool up, bool extended)
     {

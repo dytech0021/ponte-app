@@ -222,3 +222,52 @@ async function mediamtxAsks(port, request) {
   });
   return response.status;
 }
+
+// Bilhete da conta (1.17.0): um Supabase falso responde ponte_conta conforme o token.
+test('TICKET signs only for released accounts and the ticket verifies with the public key', { timeout: 20000 }, async t => {
+  const crypto = require('node:crypto');
+  const http = require('node:http');
+  const { privateKey, publicKey } = crypto.generateKeyPairSync('ec', { namedCurve: 'P-256' });
+  const accounts = {
+    'token-liberado-aaaaaaaaaaaa': { email: 'dono@exemplo.com', liberado: true, admin: true },
+    'token-de-fora-aaaaaaaaaaaaa': { email: 'outro@exemplo.com', liberado: false, admin: false },
+  };
+  const supabase = http.createServer((request, response) => {
+    const token = (request.headers.authorization || '').replace(/^Bearer /, '');
+    if (request.url !== '/rest/v1/rpc/ponte_conta' || request.method !== 'POST' || !accounts[token]) {
+      response.writeHead(401).end('{}');
+      return;
+    }
+    response.writeHead(200, { 'Content-Type': 'application/json' }).end(JSON.stringify(accounts[token]));
+  });
+  supabase.listen(0, '127.0.0.1');
+  await once(supabase, 'listening');
+  t.after(() => supabase.close());
+  const relay = await startRelay(t, 'chave-teste', {
+    PONTE_TICKET_KEY: privateKey.export({ format: 'der', type: 'pkcs8' }).toString('base64'),
+    PONTE_SUPABASE_URL: `http://127.0.0.1:${supabase.address().port}`,
+  });
+  const keyHash = 'ab'.repeat(32);
+  const ask = (token, key = 'chave-teste') => new Promise((resolve, reject) => {
+    const chunks = [];
+    const socket = net.connect(relay.port, '127.0.0.1', () => socket.write(`PONTE TICKET ${keyHash} ${key}\n${token}\n`));
+    socket.setTimeout(15000, () => socket.destroy(new Error('Response timeout')));
+    socket.on('data', chunk => chunks.push(chunk));
+    socket.on('error', reject);
+    socket.on('close', () => resolve(Buffer.concat(chunks).toString('utf8')));
+  });
+
+  const answer = await ask('token-liberado-aaaaaaaaaaaa');
+  assert.match(answer, /^TICKET [A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\n$/);
+  const [payload, signature] = answer.slice(7).trim().split('.');
+  const fromUrl = (text) => Buffer.from(text.replace(/-/g, '+').replace(/_/g, '/'), 'base64');
+  assert.ok(crypto.verify('sha256', fromUrl(payload), { key: publicKey, dsaEncoding: 'ieee-p1363' }, fromUrl(signature)));
+  const body = JSON.parse(fromUrl(payload).toString('utf8'));
+  assert.equal(body.e, 'dono@exemplo.com');
+  assert.equal(body.k, keyHash.toUpperCase());
+  assert.ok(body.x > Date.now() / 1000 + 13 * 86400);
+
+  assert.equal(await ask('token-de-fora-aaaaaaaaaaaaa'), 'ERR naoliberado outro@exemplo.com\n');
+  assert.equal(await ask('token-que-nao-existe-aaaaa'), 'ERR conta\n');
+  assert.equal(await ask('token-liberado-aaaaaaaaaaaa', 'chave-errada'), 'ERR key\n');
+});

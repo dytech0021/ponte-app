@@ -410,6 +410,16 @@ internal sealed class ViewerForm : Form
         });
         UpdateVideoMenu();
         var keys = new ToolStripDropDownButton("Teclas");
+        // Ctrl+Alt+Del de verdade não passa como teclas comuns: o outro lado pede ao serviço do Ponte de lá (1.17.0).
+        var secure = new ToolStripMenuItem("Ctrl + Alt + Del") { Enabled = session.HostHasSecureAttention };
+        if (!secure.Enabled) secure.ToolTipText = session.HostIsPhone ? "Não existe em celular." : "O outro computador precisa estar no Ponte 1.17.0 ou mais novo.";
+        secure.Click += async (_, _) =>
+        {
+            _status.Text = "Ctrl+Alt+Del enviado.";
+            await session.SendSecureAttentionAsync();
+        };
+        keys.DropDownItems.Add(secure);
+        keys.DropDownItems.Add(new ToolStripSeparator());
         keys.DropDownItems.Add("Alt + Tab", null, (_, _) => _view.SendCombo(0x12, 0x09));
         keys.DropDownItems.Add("Tecla Windows", null, (_, _) => _view.SendCombo(0x5B));
         keys.DropDownItems.Add("Windows + R (Executar)", null, (_, _) => _view.SendCombo(0x5B, 0x52));

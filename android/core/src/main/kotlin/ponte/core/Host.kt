@@ -43,6 +43,9 @@ interface HostConfig {
 
     /** Marca o acesso de agora de um autorizado. Falso se ele saiu da lista nesse meio-tempo. */
     fun touchTrusted(keyHash: String, name: String, user: String): Boolean
+
+    /** Bilhete da conta liberada deste aparelho como acessado (1.17.0); sem ele ninguém acessa. */
+    val ticket: String get() = ""
 }
 
 /** A chave e o certificado deste aparelho como acessado; o ID sai da chave pública. */
@@ -247,15 +250,20 @@ class PonteHost(private val config: HostConfig, private val key: HostKey, privat
             val nonce = ByteArray(32).also { SecureRandom().nextBytes(it) }
             val viewerKey = decodeKey(hello["Key"] as? String)
             val keyHash = viewerKey?.let { HostCrypto.keyHash(it) } ?: ""
-            val trusted = viewerKey != null && config.isTrusted(keyHash)
+            // 1.17.0: os dois lados precisam estar numa conta liberada (bilhete assinado pelo servidor do Ponte).
+            val ownTicket = config.ticket.takeIf { Ticket.valid(it, HostCrypto.keyHash(key.spki)) }
+            val viewerTicket = hello["Ticket"] as? String
+            val viewerAccount = if (viewerKey == null) Ticket.Check(null, "sem chave") else Ticket.verify(viewerTicket, keyHash)
+            val accounts = ownTicket != null && viewerAccount.email != null
+            val trusted = accounts && viewerKey != null && config.isTrusted(keyHash)
             val hasPassword = config.passwordVerifier.isNotEmpty()
-            val passwordOpen = hasPassword && System.currentTimeMillis() >= lockedUntil
+            val passwordOpen = accounts && hasPassword && System.currentTimeMillis() >= lockedUntil
             val encoder = Base64.getEncoder()
             channel.sendJson(
                 Msg.CHALLENGE,
                 mapOf(
                     "HasPassword" to passwordOpen, "Salt" to config.passwordSalt, "Iterations" to config.iterations,
-                    "Nonce" to encoder.encodeToString(nonce), "Trusted" to trusted,
+                    "Nonce" to encoder.encodeToString(nonce), "Trusted" to trusted, "Ticket" to ownTicket,
                 ),
             )
             // Daqui em diante o outro lado pode estar digitando a senha.
@@ -269,7 +277,13 @@ class PonteHost(private val config: HostConfig, private val key: HostKey, privat
             var reason: String
             var access = ""
             val proof = response["Proof"] as? String
-            if (trusted && signed && config.touchTrusted(keyHash, name, user)) {
+            if (!accounts || !signed) {
+                reason = when {
+                    ownTicket == null -> "O Ponte deste celular não está numa conta liberada. Alguém precisa abrir o Ponte nele e entrar na conta."
+                    viewerTicket == null -> "Este celular só aceita acesso de quem entrou numa conta liberada. Atualize o Ponte (1.17.0 ou mais nova) e entre na conta."
+                    else -> "A conta de quem está acessando não vale aqui (${if (signed) viewerAccount.reason else "aparelho sem prova da própria chave"}). Saia e entre de novo na conta."
+                }
+            } else if (trusted && signed && config.touchTrusted(keyHash, name, user)) {
                 ok = true
                 paired = true
                 reason = ""

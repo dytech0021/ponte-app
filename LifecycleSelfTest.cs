@@ -30,6 +30,7 @@ internal static class LifecycleSelfTest
             var listener = new TcpListener(IPAddress.Loopback, 0); listener.Start(); int port = ((IPEndPoint)listener.LocalEndpoint).Port; listener.Stop();
             var hc = AppConfig.Load(Path.Combine(dir, "host")); hc.RelayServer = ""; hc.ListenPort = port; hc.AutoUpdate = false; hc.SetPassword("Ponte-teste-ciclo-privado");
             var vc = AppConfig.Load(Path.Combine(dir, "viewer")); vc.RelayServer = ""; vc.AutoUpdate = false;
+            Ticket.GiveTestTicket(hc); Ticket.GiveTestTicket(vc);
             string target = $"127.0.0.1:{port}"; vc.SaveComputer(target, "Host isolado", true);
             host = new HostService(hc); host.Start(IPAddress.Loopback);
             viewer = await ViewerSession.ConnectAsync(vc, target, () => Task.FromResult<string?>("Ponte-teste-ciclo-privado"), () => Task.FromResult(false), Path.Combine(dir,"recebidos"), CancellationToken.None);

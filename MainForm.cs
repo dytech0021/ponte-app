@@ -32,6 +32,11 @@ internal sealed class MainForm : Form
     private Account? _account;
     private readonly SemaphoreSlim _syncGate = new(1, 1);
     private long _lastSync;
+    // 1.17.0: conta obrigatória. O bilhete (Ticket) é renovado em segundo plano; _accountAdmin abre a lista de liberadas.
+    private bool _accountAdmin;
+    private long _lastTicketTry;
+    private readonly System.Windows.Forms.Timer _ticketTimer = new() { Interval = 15 * 60 * 1000 };
+    private readonly System.Windows.Forms.Timer _loginTimer = new() { Interval = 1500 };
     // Aberto pela inicialização do Windows: a janela nem aparece, fica só o ícone perto do relógio.
     private bool _startHidden;
 
@@ -81,9 +86,6 @@ internal sealed class MainForm : Form
             using var dialog = new AndroidAppDialog(_config);
             dialog.ShowDialog(this);
         };
-        // As lives e os amigos saíram do Ponte e agora ficam no Exilados (texto, voz e lives do grupo).
-        var lives = Ui.Button(local, "Lives no Exilados...", 192, 406, 112);
-        lives.Click += (_, _) => Process.Start(new ProcessStartInfo("https://filabox3d.com.br/exilados/") { UseShellExecute = true })?.Dispose();
 
         var remote = new GroupBox { Text = "Computador remoto", Location = new Point(344, 12), Size = new Size(404, 470) };
         Ui.Text(remote, "Endereço (ID ou IP)", 16, 26, 372);
@@ -158,6 +160,16 @@ internal sealed class MainForm : Form
         if (_account is not null) _account.TokenChanged += StoreAccount;
         UpdateAccountButton();
         if (_account is not null) _ = SyncAccountAsync();
+        // Ao abrir, sem conta, o Ponte já pede o login: sem ele não acessa nem é acessado.
+        _ticketTimer.Tick += (_, _) => _ = RenewTicketAsync();
+        _ticketTimer.Start();
+        _loginTimer.Tick += (_, _) =>
+        {
+            _loginTimer.Stop();
+            if (_account is null) RequireLogin();
+        };
+        if (!args.Any(a => a is "--captura-ui" or "--demo" or "--autoteste" or "--janela-teste")) _loginTimer.Start();
+        if (_account is not null) _ = RenewTicketAsync(force: !Ticket.Valid(_config));
 
         ShowVersion(args.Contains("--atualizado") ? "atualizado agora" : "");
         if (!Elevation.IsElevated)
@@ -432,7 +444,9 @@ internal sealed class MainForm : Form
 
     private void UpdateStatus()
     {
-        _relayStatus.Text = string.Join(" ", new[] { _host.RelayStatus, _host.DirectStatus }.Where(s => s.Length > 0));
+        _relayStatus.Text = Ticket.Valid(_config)
+            ? string.Join(" ", new[] { _host.RelayStatus, _host.DirectStatus }.Where(s => s.Length > 0))
+            : "Ninguém consegue acessar este computador: entre numa conta liberada.";
         int trusted = _config.TrustedSnapshot().Length;
         _passwordState.Text = _config.HasPassword
             ? "Senha de acesso: definida"
@@ -471,6 +485,16 @@ internal sealed class MainForm : Form
             return;
         }
         if (!_connect.Enabled) return;
+        if (!Ticket.Valid(_config))
+        {
+            if (_account is null) RequireLogin();
+            else await RenewTicketAsync(force: true);
+            if (!Ticket.Valid(_config))
+            {
+                if (_account is not null) _status.Text = "Para acessar outro aparelho, a sua conta precisa estar liberada no Ponte.";
+                return;
+            }
+        }
         _connect.Enabled = false;
         var saved = _config.FindSaved(AppConfig.Target(target).Key);
         bool wanted = saved?.AutoAccess == true, wasPaired = saved?.Paired == true;
@@ -631,23 +655,93 @@ internal sealed class MainForm : Form
 
     // ---------- conta ----------
 
-    private void UpdateAccountButton() =>
-        _accountButton.Text = _account is null ? "Entrar na conta..." : $"Conta: {_account.Email}";
+    private void UpdateAccountButton()
+    {
+        bool ok = _account is not null && Ticket.Valid(_config);
+        _accountButton.Text = _account is null ? "Entrar na conta (obrigatório)..."
+            : ok ? $"Conta: {_account.Email}" : $"Conta: {_account.Email} (não liberada)";
+        _accountButton.ForeColor = ok ? SystemColors.ControlText : Ui.Danger;
+    }
+
+    // Janela de login: o Ponte fica sem acessar nem ser acessado até alguém entrar numa conta liberada.
+    private void RequireLogin()
+    {
+        if (_account is not null || _closed) return;
+        ShowFromTray();
+        using var dialog = new AccountDialog(_config, required: true);
+        if (dialog.ShowDialog(this) != DialogResult.OK || dialog.Account is not { } account)
+        {
+            _status.Text = "Sem conta, o Ponte não acessa outros aparelhos nem pode ser acessado. Use o botão da conta para entrar.";
+            UpdateStatus();
+            return;
+        }
+        _account = account;
+        _account.TokenChanged += StoreAccount;
+        _accountAdmin = dialog.Admin;
+        StoreAccount(account);
+        SetTicket(dialog.IssuedTicket);
+        _status.Text = $"Conta {account.Email} liberada: o Ponte está pronto para acessar e ser acessado.";
+        _ = SyncAccountAsync();
+    }
+
+    private void SetTicket(string ticket)
+    {
+        _config.Ticket = ticket;
+        try { _config.Save(); }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { }
+        // O serviço (acesso antes do login) atende com o mesmo ID: leva o bilhete junto.
+        if (WindowsHost.Installed && WindowsHost.Owns(_config))
+        {
+            try { WindowsHost.Export(_config); }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or System.Security.Cryptography.CryptographicException or System.Text.Json.JsonException or PonteException) { }
+        }
+        UpdateAccountButton();
+        UpdateStatus();
+    }
+
+    /// <summary>Renova o bilhete quando falta menos de uma semana (ou na marra). Sem internet, o bilhete atual vale até vencer.</summary>
+    private async Task RenewTicketAsync(bool force = false)
+    {
+        if (_account is not { } account || _closed) return;
+        if (!force && Ticket.Valid(_config, Ticket.RenewBefore)) return;
+        if (!force && Stopwatch.GetElapsedTime(_lastTicketTry) < TimeSpan.FromMinutes(10)) return;
+        _lastTicketTry = Stopwatch.GetTimestamp();
+        try
+        {
+            string ticket = await Ticket.RequestAsync(_config, await account.AccessTokenAsync(CancellationToken.None), CancellationToken.None);
+            if (_closed || _account != account) return;
+            SetTicket(ticket);
+            try { _accountAdmin = (await account.StatusAsync(CancellationToken.None)).Admin; }
+            catch (PonteException) { }
+        }
+        catch (Ticket.NotReleasedException ex)
+        {
+            if (_closed) return;
+            SetTicket("");
+            _status.Text = ex.Message;
+        }
+        catch (PonteException ex)
+        {
+            if (_closed) return;
+            if (ex.Message.StartsWith("A conta saiu")) await SignOutAsync();
+            else if (!Ticket.Valid(_config)) _status.Text = "Conta: " + ex.Message;
+        }
+    }
 
     private void AccountClicked()
     {
-        if (_account is null)
+        if (_account is not { } current)
         {
-            using var dialog = new AccountDialog();
-            if (dialog.ShowDialog(this) != DialogResult.OK || dialog.Account is not { } account) return;
-            _account = account;
-            _account.TokenChanged += StoreAccount;
-            StoreAccount(account);
-            UpdateAccountButton();
-            _ = SyncAccountAsync();
+            RequireLogin();
             return;
         }
         var menu = new ContextMenuStrip();
+        if (!Ticket.Valid(_config)) menu.Items.Add("Conferir a conta de novo", null, (_, _) => _ = RenewTicketAsync(force: true));
+        if (_accountAdmin) menu.Items.Add("Contas liberadas do Ponte...", null, (_, _) =>
+        {
+            using var dialog = new ReleasedDialog(current);
+            dialog.ShowDialog(this);
+        });
         menu.Items.Add("Sincronizar a lista agora", null, (_, _) => _ = SyncAccountAsync());
         menu.Items.Add("Criar ou gerenciar a conta no FilaBox", null, (_, _) => Account.OpenSite("/login"));
         menu.Items.Add(new ToolStripSeparator());
@@ -690,9 +784,10 @@ internal sealed class MainForm : Form
         _account = null;
         account.TokenChanged -= StoreAccount;
         _config.SignOutAccount();
-        UpdateAccountButton();
+        _accountAdmin = false;
+        SetTicket("");
         RefreshComputers();
-        _status.Text = "Você saiu da conta neste computador. Os computadores dela não aparecem mais aqui.";
+        _status.Text = "Você saiu da conta neste computador. Sem conta, o Ponte não acessa nem é acessado.";
         await account.SignOutAsync();
     }
 

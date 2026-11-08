@@ -188,6 +188,8 @@ internal sealed class AppConfig
     public string AccountToken { get; set; } = "";
     /// <summary>Computadores apagados aqui que ainda precisam sair da conta (o apagar pode ter sido sem internet).</summary>
     public List<string> AccountPendingDeletes { get; set; } = new();
+    /// <summary>Bilhete da conta liberada (1.17.0), assinado pelo servidor do Ponte: sem ele não se acessa nem se é acessado.</summary>
+    public string Ticket { get; set; } = "";
     public List<TrustedViewer> Trusted { get; set; } = new();
     public Dictionary<string, string> KnownHosts { get; set; } = new();
 
@@ -407,7 +409,7 @@ internal sealed class AppConfig
         {
             mine = Saved.Where(s => s.Synced).Select(s => s.Key).ToList();
             Saved.RemoveAll(s => s.Synced);
-            AccountEmail = AccountUserId = AccountToken = "";
+            AccountEmail = AccountUserId = AccountToken = Ticket = "";
             AccountPendingDeletes.Clear();
             Save();
         }

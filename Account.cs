@@ -156,6 +156,63 @@ internal sealed class Account
         using var _ = await SendAsync(request, ct);
     }
 
+    // ---------- contas liberadas (1.17.0) ----------
+
+    /// <summary>Token de acesso atual (renovado se preciso), para o servidor do Ponte conferir a conta e assinar o bilhete.</summary>
+    public async Task<string> AccessTokenAsync(CancellationToken ct)
+    {
+        using var request = await AuthorizedAsync(HttpMethod.Get, "/", ct);
+        return _access;
+    }
+
+    internal sealed record Status(
+        [property: JsonPropertyName("email")] string? Email,
+        [property: JsonPropertyName("liberado")] bool Released,
+        [property: JsonPropertyName("admin")] bool Admin);
+
+    public async Task<Status> StatusAsync(CancellationToken ct)
+    {
+        using var response = await RpcAsync("ponte_conta", new { }, ct);
+        return JsonSerializer.Deserialize<Status>(await response.Content.ReadAsStringAsync(ct)) ?? new Status(null, false, false);
+    }
+
+    internal sealed record Released(
+        [property: JsonPropertyName("email")] string Email,
+        [property: JsonPropertyName("admin")] bool Admin,
+        [property: JsonPropertyName("liberado_em")] DateTime When,
+        [property: JsonPropertyName("liberado_por")] string? By);
+
+    /// <summary>Só o administrador: as contas liberadas para usar o Ponte.</summary>
+    public async Task<List<Released>> ReleasedAsync(CancellationToken ct)
+    {
+        using var response = await RpcAsync("ponte_lista", new { }, ct);
+        return JsonSerializer.Deserialize<List<Released>>(await response.Content.ReadAsStringAsync(ct)) ?? new();
+    }
+
+    public async Task ReleaseAsync(string email, CancellationToken ct)
+    {
+        using var _ = await RpcAsync("ponte_liberar", new { p_email = email.Trim() }, ct);
+    }
+
+    public async Task UnreleaseAsync(string email, CancellationToken ct)
+    {
+        using var _ = await RpcAsync("ponte_remover", new { p_email = email.Trim() }, ct);
+    }
+
+    private async Task<HttpResponseMessage> RpcAsync(string function, object body, CancellationToken ct)
+    {
+        var request = await AuthorizedAsync(HttpMethod.Post, "/rest/v1/rpc/" + function, ct);
+        request.Content = new StringContent(JsonSerializer.Serialize(body), Encoding.UTF8, "application/json");
+        using (request)
+        {
+            try { return await SendAsync(request, ct); }
+            catch (PonteException ex) when (ex.Message.Contains("(404)") || ex.Message.Contains("ainda não está pronta"))
+            {
+                throw new PonteException("O servidor da conta ainda não tem a lista de contas liberadas do Ponte.");
+            }
+        }
+    }
+
     // ---------- HTTP ----------
 
     private async Task<HttpRequestMessage> AuthorizedAsync(HttpMethod method, string path, CancellationToken ct)
@@ -190,9 +247,17 @@ internal sealed class Account
         if (response.IsSuccessStatusCode) return response;
         string body = await response.Content.ReadAsStringAsync(ct);
         response.Dispose();
+        // As funções do banco explicam a recusa em "message" (por exemplo, "Só o administrador do Ponte libera contas.").
+        string? explained = null;
+        try
+        {
+            using var json = JsonDocument.Parse(body);
+            if (json.RootElement.TryGetProperty("message", out var m) && m.GetString() is { Length: > 0 } text && !text.StartsWith("Could not find")) explained = text;
+        }
+        catch (JsonException) { }
         throw new PonteException(response.StatusCode == HttpStatusCode.NotFound
             ? "A conta ainda não está pronta no servidor (falta a tabela do Ponte)."
-            : $"O servidor da conta recusou o pedido ({(int)response.StatusCode}). {Short(body)}");
+            : explained ?? $"O servidor da conta recusou o pedido ({(int)response.StatusCode}). {Short(body)}");
     }
 
     private sealed record Session(

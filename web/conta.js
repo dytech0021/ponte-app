@@ -150,6 +150,12 @@ export class Account {
     try { await this.authorized('POST', '/auth/v1/logout?scope=local'); } catch { /* saiu daqui de qualquer jeito */ }
   }
 
+  /** Token de acesso atual (renovado se preciso), para o servidor do Ponte conferir a conta. */
+  async accessToken() {
+    await this.ensureAccess();
+    return this.access;
+  }
+
   async ensureAccess() {
     if (Date.now() < this.expires && this.access) return;
     // Duas chamadas ao mesmo tempo usariam o mesmo token de renovação, e a segunda seria recusada.

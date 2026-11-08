@@ -51,6 +51,15 @@ class Store(context: Context) {
         get() = prefs.getString("chave", null) ?: BuildConfig.RELAY_KEY
         set(value) = prefs.edit().putString("chave", value.trim()).apply()
 
+    /** Bilhetes da conta liberada (1.17.0): o de quem acessa e o do celular como acessado. Ver [BilheteConta]. */
+    var ticket: String
+        get() = prefs.getString("bilhete", "") ?: ""
+        set(value) = prefs.edit().putString("bilhete", value).apply()
+
+    var hostTicket: String
+        get() = prefs.getString("bilheteAcesso", "") ?: ""
+        set(value) = prefs.edit().putString("bilheteAcesso", value).apply()
+
     /** Nome com que este aparelho aparece no pedido de conexão e na lista de autorizados do computador. */
     var deviceName: String
         get() = prefs.getString("nome", null)?.takeIf { it.isNotBlank() } ?: defaultDeviceName()
@@ -221,7 +230,7 @@ class Store(context: Context) {
             writeSaved(all.filter { !it.synced })
             pendingDeletes = emptyList()
             current = null
-            prefs.edit().remove("contaEmail").remove("contaUsuario").remove("contaToken").apply()
+            prefs.edit().remove("contaEmail").remove("contaUsuario").remove("contaToken").remove("bilhete").remove("bilheteAcesso").apply()
             mine
         }
         mine.forEach { deleteThumbnail(it) }

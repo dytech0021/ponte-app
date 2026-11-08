@@ -29,10 +29,14 @@ class TemaUiTest {
     @Before fun prepara() {
         context.getSharedPreferences("ponte", 0).edit().clear().commit()
         DeviceIdentity.replacement = Apoio.identidade()
+        Apoio.contaLiberada(context)
         UpdateFlow.automatic = false
     }
 
-    @After fun desfaz() { DeviceIdentity.replacement = null }
+    @After fun desfaz() {
+        Apoio.semConta(context)
+        DeviceIdentity.replacement = null
+    }
 
     @Test fun automaticoSegueSistemaClaro() = verificaTema(false, "tema-claro-320.png")
 

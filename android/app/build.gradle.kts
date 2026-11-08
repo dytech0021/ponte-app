@@ -1,11 +1,11 @@
-import java.util.Properties
+﻿import java.util.Properties
 
 plugins {
     id("com.android.application")
     id("org.jetbrains.kotlin.android")
 }
 
-// Arquivos locais, fora do git: o servidor de retransmissão com a chave, e a chave que assina o APK.
+// Arquivos locais, fora do git: o servidor de retransmissÃ£o com a chave, e a chave que assina o APK.
 fun localProperties(name: String) = Properties().apply {
     val file = rootProject.file(name)
     if (file.exists()) file.inputStream().use { load(it) }
@@ -22,13 +22,13 @@ android {
         applicationId = "com.dytech.ponte"
         minSdk = 26
         targetSdk = 35
-        // A cada versão publicada: versionCode sobe de um em um e versionName acompanha.
-        versionCode = 17
-        versionName = "1.14.0"
+        // A cada versÃ£o publicada: versionCode sobe de um em um e versionName acompanha.
+        versionCode = 18
+        versionName = "1.17.0"
         buildConfigField("String", "RELAY_SERVER", "\"${relay.getProperty("server", "")}\"")
         buildConfigField("String", "RELAY_KEY", "\"${relay.getProperty("key", "")}\"")
-        // Os links das transmissões de tela (https://servidor/ponte/assistir/#código) abrem no aplicativo: o servidor
-        // é o mesmo da retransmissão, pelo nome.
+        // Os links das transmissÃµes de tela (https://servidor/ponte/assistir/#cÃ³digo) abrem no aplicativo: o servidor
+        // Ã© o mesmo da retransmissÃ£o, pelo nome.
         manifestPlaceholders["webHost"] = relay.getProperty("server", "").substringBefore(':').ifEmpty { "filabox3d.com.br" }
     }
 
@@ -76,7 +76,7 @@ android {
         }
     }
     lint {
-        // O aplicativo é só em português e não usa a biblioteca de compatibilidade.
+        // O aplicativo Ã© sÃ³ em portuguÃªs e nÃ£o usa a biblioteca de compatibilidade.
         disable += setOf("HardcodedText", "SetTextI18n")
     }
 }

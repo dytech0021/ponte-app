@@ -101,6 +101,11 @@ class AcessoActivity : Activity() {
             main.addView(text((if (AcessoService.online) "● " else "○ ") + status, 14f, if (AcessoService.online) R.color.destaque else R.color.texto_secundario).apply {
                 setPadding(0, dp(6), 0, 0)
             })
+            if (!BilheteConta.hostOk(Store(this))) {
+                main.addView(text("Sem uma conta liberada neste celular, ninguém consegue acessá-lo. Entre na conta na tela inicial do Ponte.", 14f, R.color.perigo).apply {
+                    setPadding(0, dp(8), 0, 0)
+                })
+            }
             AcessoService.session?.let { session ->
                 main.addView(text("${session.peerName} está acessando agora (${session.access}).", 15f, R.color.texto, bold = true).apply { setPadding(0, dp(12), 0, dp(6)) })
                 main.addView(button("Encerrar a sessão", primary = true) { session.stop() })

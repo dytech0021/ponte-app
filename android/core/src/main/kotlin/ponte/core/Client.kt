@@ -24,6 +24,8 @@ class ClientConfig(
     val deviceName: String,
     val userName: String,
     val version: String,
+    /** Bilhete da conta liberada (1.17.0), preso à chave deste aparelho. Sem ele não se acessa nada. */
+    val ticket: String = "",
 )
 
 interface ConnectCallbacks {
@@ -82,6 +84,8 @@ object PonteClient {
         callbacks: ConnectCallbacks,
     ): Session {
         val target = Target.parse(targetText)
+        if (!Ticket.valid(config.ticket, HostCrypto.keyHash(identity.spki)))
+            throw PonteException("Para acessar outro aparelho, entre numa conta liberada do Ponte (botão Conta).")
         val socket = if (target.isId) openThroughRelay(config, target.id) else open(target.host, target.port)
         try {
             val trust = RemoteIdentityCheck(if (target.isId) target.id else null)
@@ -108,10 +112,20 @@ object PonteClient {
                 Msg.HELLO,
                 mapOf(
                     "Name" to config.deviceName, "User" to config.userName, "Version" to config.version, "Key" to encoder.encodeToString(identity.spki),
-                    "Caps" to (Caps.CURSOR or Caps.AUDIO),
+                    "Caps" to (Caps.CURSOR or Caps.AUDIO), "Ticket" to config.ticket.ifEmpty { null },
                 ),
             )
             val challenge = channel.expectJson(Msg.CHALLENGE)
+            // O outro lado também precisa estar numa conta liberada. Sem bilhete, ele é anterior à 1.17.0 (e responder
+            // sem senha abriria um pedido de aceite lá) ou ninguém entrou na conta nele: para aqui mesmo.
+            val hostTicket = challenge["Ticket"] as? String
+            val hostAccount = Ticket.verify(hostTicket, HostCrypto.keyHash(certificate.publicKey.encoded))
+            if (hostAccount.email == null)
+                throw PonteException(
+                    if (hostTicket == null) "O outro aparelho não está numa conta liberada do Ponte (ou ainda não tem a versão 1.17.0). " +
+                        "Alguém precisa abrir o Ponte nele, atualizar e entrar na conta."
+                    else "O outro aparelho mandou um bilhete de conta que não vale (${hostAccount.reason}). Alguém precisa sair e entrar de novo na conta nele."
+                )
             val nonce = decode(challenge.str("Nonce"))
             if (nonce.size != 32) throw PonteException("O outro computador enviou um desafio inválido.")
             // A assinatura vai sempre: é ela que deixa o outro lado reconhecer este aparelho, agora ou numa próxima vez.
@@ -139,6 +153,7 @@ object PonteClient {
             ssl.soTimeout = 0
             val screens = result.objects("Screens").map { ScreenInfo(it.int("Index"), it.int("Width"), it.int("Height"), it.bool("Primary")) }
             return Session(ssl, channel, target, result.str("HostName"), screens, result.bool("Paired"), result.str("Version").take(20), fingerprint, result.int("Caps"))
+                .also { it.hostAccount = hostAccount.email }
         } catch (e: Exception) {
             try { socket.close() } catch (ignored: IOException) { }
             throw when (e) {
@@ -271,6 +286,13 @@ class Session internal constructor(
     /** Do outro lado está um celular (1.14.0 em diante): há Voltar, Início e Apps (teclas de [PhoneKeys]). */
     val isPhone: Boolean = (hostCaps and Caps.PHONE) != 0
 
+    /** O computador manda Ctrl+Alt+Del de verdade (1.17.0, com o serviço do Ponte instalado lá). */
+    val hasSecureAttention: Boolean = (hostCaps and Caps.SECURE_ATTENTION) != 0
+
+    /** A conta liberada em que o outro lado está (1.17.0). */
+    var hostAccount: String = ""
+        internal set
+
     /** Lê as mensagens até a sessão acabar. Bloqueia: rode numa thread própria. */
     fun run(listener: SessionListener) {
         var reason = "O outro computador encerrou a sessão."
@@ -308,6 +330,9 @@ class Session internal constructor(
         val w = wheel.coerceIn(Short.MIN_VALUE.toInt(), Short.MAX_VALUE.toInt())
         enqueue(Msg.MOUSE, byteArrayOf(nx.toByte(), (nx shr 8).toByte(), ny.toByte(), (ny shr 8).toByte(), action.toByte(), w.toByte(), (w shr 8).toByte()))
     }
+
+    /** Ctrl+Alt+Del no computador; quando não dá (sem o serviço, por exemplo), o motivo volta como aviso. */
+    fun sendSecureAttention() = enqueue(Msg.SECURE_ATTENTION, ByteArray(0))
 
     /** @param virtualKey código de tecla virtual do Windows */
     fun sendKey(virtualKey: Int, up: Boolean, extended: Boolean = false) {

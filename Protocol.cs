@@ -16,6 +16,8 @@ internal enum Msg : byte
     Settings = 50, VideoStart = 51, VideoData = 52, VideoStatus = 53, VideoFeedback = 54,
     Notice = 60,
     Ping = 70, Pong = 71, Restart = 72, RestartResult = 73,
+    /// <summary>1.17.0: Ctrl+Alt+Del de verdade (a tela segura do Windows), pelo serviço do Ponte do outro lado.</summary>
+    SecureAttention = 74,
     Bye = 99,
 }
 
@@ -36,6 +38,8 @@ internal static class Caps
     public const int Management = 32;
     /// <summary>Só no AuthResult (1.16.0): Settings com Screen = <see cref="ScreenInfo.All"/> transmite todas as telas numa imagem só.</summary>
     public const int AllScreens = 64;
+    /// <summary>Só no AuthResult (1.17.0): entende <see cref="Msg.SecureAttention"/> (Ctrl+Alt+Del). Se o serviço não estiver instalado, responde com um aviso.</summary>
+    public const int SecureAttention = 128;
 }
 
 /// <summary>Teclas que um celular controlado entende como os botões dele (1.14.0).</summary>
@@ -48,11 +52,14 @@ internal static class PhoneKeys
 
 /// <summary>
 /// Key é a chave pública do visualizador (SPKI em base64); é por ela que o outro lado o reconhece nas próximas vezes.
-/// Caps nulo é um visualizador anterior à 1.5.0.
+/// Caps nulo é um visualizador anterior à 1.5.0. Ticket (1.17.0) é o bilhete da conta liberada de quem acessa, preso a essa chave.
 /// </summary>
-internal sealed record HelloMsg(string Name, string User, string Version, string? Key = null, int? Caps = null, bool Resume = false);
-/// <summary>Trusted avisa que a chave do visualizador já está autorizada: basta a assinatura, sem senha nem aceite.</summary>
-internal sealed record ChallengeMsg(bool HasPassword, string Salt, int Iterations, string Nonce, bool Trusted = false);
+internal sealed record HelloMsg(string Name, string User, string Version, string? Key = null, int? Caps = null, bool Resume = false, string? Ticket = null);
+/// <summary>
+/// Trusted avisa que a chave do visualizador já está autorizada: basta a assinatura, sem senha nem aceite.
+/// Ticket (1.17.0) é o bilhete da conta liberada do computador acessado, preso à chave do certificado dele.
+/// </summary>
+internal sealed record ChallengeMsg(bool HasPassword, string Salt, int Iterations, string Nonce, bool Trusted = false, string? Ticket = null);
 /// <summary>
 /// Proof nulo significa "sem senha: peça permissão a quem está na frente do computador".
 /// Signature prova a posse da chave enviada no Hello; Remember pede para ficar autorizado depois de entrar com a senha.

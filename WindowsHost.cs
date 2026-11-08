@@ -337,6 +337,7 @@ internal static class WindowsHost
                     catch (Exception ex) when (ex is IOException or OperationCanceledException or UnauthorizedAccessException) { if (!pipeStop.IsCancellationRequested) await Task.Delay(500, pipeStop.Token); }
                 }
             });
+            var sasServer = Task.Run(() => ServeSecureAttentionAsync(pipeStop.Token));
             Process? child = null; uint session = uint.MaxValue;
             try
             {
@@ -354,7 +355,7 @@ internal static class WindowsHost
             }
             finally
             {
-                pipeStop.Cancel(); try { pipeServer.Wait(4000); } catch (AggregateException) { }
+                pipeStop.Cancel(); try { Task.WaitAll([pipeServer, sasServer], 4000); } catch (AggregateException) { }
                 if (_job != IntPtr.Zero) { CloseHandle(_job); _job = IntPtr.Zero; }
                 if (child is not null) { child.WaitForExit(3000); child.Dispose(); } Report(1);
             }
@@ -362,6 +363,108 @@ internal static class WindowsHost
         try { return StartServiceCtrlDispatcher([new ServiceEntry { name = Name, main = _main }, new ServiceEntry()]) ? 0 : Marshal.GetLastWin32Error(); }
         finally { if (_job != IntPtr.Zero) { CloseHandle(_job); _job = IntPtr.Zero; } }
     }
+    // ---------- Ctrl+Alt+Del (1.17.0) ----------
+    //
+    // O Windows só aceita o Ctrl+Alt+Del simulado (SendSAS) de um serviço, e só com a política SoftwareSASGeneration
+    // liberando serviços. Quem atende a sessão (o Ponte como administrador ou o agente do serviço) pede por este pipe;
+    // o serviço confere que quem pediu é o SYSTEM ou um administrador e chama SendSAS.
+
+    private const string SasPipe = "PonteHostSas";
+
+    /// <summary>Só o autoteste: troca o pedido ao serviço (que abriria a tela segura de verdade).</summary>
+    internal static Func<string?>? SecureAttentionOverride;
+
+    /// <summary>Pede o Ctrl+Alt+Del ao serviço. Devolve null se ele foi feito, ou o motivo de não ter sido.</summary>
+    public static async Task<string?> SecureAttentionAsync(CancellationToken ct)
+    {
+        if (SecureAttentionOverride is { } test) return test();
+        if (!Installed)
+            return "Ctrl+Alt+Del remoto precisa do serviço do Ponte neste computador: abra o Ponte como administrador nele e instale em Configurações → Serviço: acesso antes do login.";
+        try
+        {
+            using var pipe = new NamedPipeClientStream(".", SasPipe, PipeDirection.InOut, PipeOptions.Asynchronous, TokenImpersonationLevel.Identification);
+            using var deadline = CancellationTokenSource.CreateLinkedTokenSource(ct);
+            deadline.CancelAfter(TimeSpan.FromSeconds(5));
+            await pipe.ConnectAsync(deadline.Token);
+            await pipe.WriteAsync("SAS!"u8.ToArray(), deadline.Token);
+            var answer = new byte[1];
+            await pipe.ReadExactlyAsync(answer, deadline.Token);
+            return answer[0] switch
+            {
+                1 => null,
+                2 => "O serviço do Ponte só aceita o Ctrl+Alt+Del do Ponte aberto como administrador. Abra o Ponte como administrador neste computador.",
+                _ => "O Windows não aceitou o Ctrl+Alt+Del simulado neste computador.",
+            };
+        }
+        catch (UnauthorizedAccessException)
+        {
+            return "O serviço do Ponte só aceita o Ctrl+Alt+Del do Ponte aberto como administrador. Abra o Ponte como administrador neste computador.";
+        }
+        catch (Exception ex) when (ex is IOException or OperationCanceledException or TimeoutException)
+        {
+            return "O serviço do Ponte neste computador ainda não sabe fazer Ctrl+Alt+Del. Abra o Ponte 1.17.0 como administrador nele para o serviço se atualizar.";
+        }
+    }
+
+    private static async Task ServeSecureAttentionAsync(CancellationToken stop)
+    {
+        while (!stop.IsCancellationRequested)
+        {
+            var security = new PipeSecurity();
+            security.AddAccessRule(new PipeAccessRule(new SecurityIdentifier(WellKnownSidType.NetworkSid, null), PipeAccessRights.FullControl, AccessControlType.Deny));
+            security.AddAccessRule(new PipeAccessRule(new SecurityIdentifier(WellKnownSidType.LocalSystemSid, null), PipeAccessRights.FullControl, AccessControlType.Allow));
+            security.AddAccessRule(new PipeAccessRule(new SecurityIdentifier(WellKnownSidType.BuiltinAdministratorsSid, null), PipeAccessRights.ReadWrite, AccessControlType.Allow));
+            try
+            {
+                using var pipe = NamedPipeServerStreamAcl.Create(SasPipe, PipeDirection.InOut, 1, PipeTransmissionMode.Byte, PipeOptions.Asynchronous | PipeOptions.FirstPipeInstance, 64, 64, security);
+                await pipe.WaitForConnectionAsync(stop);
+                using var deadline = CancellationTokenSource.CreateLinkedTokenSource(stop);
+                deadline.CancelAfter(TimeSpan.FromSeconds(3));
+                byte[] command = new byte[4];
+                await pipe.ReadExactlyAsync(command, deadline.Token);
+                if (!command.AsSpan().SequenceEqual("SAS!"u8)) continue;
+                bool allowed = false;
+                pipe.RunAsClient(() =>
+                {
+                    using var caller = WindowsIdentity.GetCurrent(TokenAccessLevels.Query);
+                    allowed = caller.IsSystem || new WindowsPrincipal(caller).IsInRole(WindowsBuiltInRole.Administrator);
+                });
+                byte result = 2;
+                if (allowed)
+                {
+                    try
+                    {
+                        AllowServiceSas();
+                        SendSAS(false);
+                        result = 1;
+                        SessionLog.Write("serviço: Ctrl+Alt+Del pedido pela sessão remota");
+                    }
+                    catch (Exception ex) when (ex is UnauthorizedAccessException or System.Security.SecurityException or IOException or DllNotFoundException or EntryPointNotFoundException)
+                    {
+                        result = 3;
+                        SessionLog.Write("serviço: Ctrl+Alt+Del falhou (" + ex.GetType().Name + ")");
+                    }
+                }
+                await pipe.WriteAsync(new[] { result }, deadline.Token);
+                await pipe.FlushAsync(deadline.Token);
+            }
+            catch (Exception ex) when (ex is IOException or OperationCanceledException or UnauthorizedAccessException)
+            {
+                if (!stop.IsCancellationRequested) { try { await Task.Delay(500, stop); } catch (OperationCanceledException) { } }
+            }
+        }
+    }
+
+    // Política "Desabilitar ou habilitar a Sequência de Atenção Segura de software": o bit 1 libera os serviços.
+    private static void AllowServiceSas()
+    {
+        using var key = Microsoft.Win32.Registry.LocalMachine.CreateSubKey(@"SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System", true);
+        int current = key.GetValue("SoftwareSASGeneration") is int value ? value : 0;
+        if ((current & 1) == 0) key.SetValue("SoftwareSASGeneration", current | 1, Microsoft.Win32.RegistryValueKind.DWord);
+    }
+
+    [DllImport("sas.dll")] private static extern void SendSAS([MarshalAs(UnmanagedType.Bool)] bool asUser);
+
     private static void Report(uint state) { var s = new ServiceStatus { type = 0x10, state = state, accepted = state == 4 ? 5u : 0, wait = state is 2 or 3 ? 10000u : 0 }; SetServiceStatus(_status, ref s); }
     private static Process Launch(uint session)
     {

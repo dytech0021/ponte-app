@@ -12,13 +12,13 @@ export const Msg = {
   HELLO: 1, CHALLENGE: 2, AUTH_RESPONSE: 3, AUTH_RESULT: 4,
   FRAME: 10, CURSOR: 11, AUDIO: 12, CURSOR_POS: 13,
   MOUSE: 20, KEY: 21, TEXT: 22,
-  CLIPBOARD: 30, SETTINGS: 50, NOTICE: 60, BYE: 99,
+  CLIPBOARD: 30, SETTINGS: 50, NOTICE: 60, SECURE_ATTENTION: 74, BYE: 99,
 };
 
 export const MouseAction = { MOVE: 0, LEFT_DOWN: 1, LEFT_UP: 2, RIGHT_DOWN: 3, RIGHT_UP: 4, MIDDLE_DOWN: 5, MIDDLE_UP: 6, WHEEL: 7 };
 
 /** O que o navegador sabe fazer além do básico: desenhar o ponteiro que vem do computador. */
-export const Caps = { FILES: 1, CURSOR: 2, AUDIO: 4, PHONE: 16 };
+export const Caps = { FILES: 1, CURSOR: 2, AUDIO: 4, PHONE: 16, SECURE_ATTENTION: 128 };
 /** Teclas que um celular acessado (Ponte para Android 1.14.0) entende como Voltar, Início e Apps recentes. */
 export const PhoneKeys = { BACK: 0xA6, HOME: 0xAC, RECENTS: 0x5D };
 
@@ -54,6 +54,98 @@ export function hex(bytes) {
 
 export async function sha256(...parts) {
   return new Uint8Array(await subtle.digest('SHA-256', concat(...parts)));
+}
+
+// ---------- bilhete da conta (1.17.0, o mesmo de Ticket.cs) ----------
+// O Ponte só funciona com uma conta liberada pelo dono. O servidor do Ponte confere a conta e assina "a chave deste
+// aparelho é da conta X, até tal dia"; cada lado de uma sessão manda o seu bilhete e confere o do outro.
+
+/** Chave pública (SPKI, EC P-256) do servidor que assina os bilhetes. A privada fica só no servidor. */
+export const TICKET_ISSUER_KEY =
+  'MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEnhEA2rsYc5UCSKpkORCQ/yTmqKPa33hievj1yunmgcJrtAmWmK++WYiFnXCndxKdaFvr/YMlLEX7wxOou/A/FA==';
+/** Renovar quando faltar menos de uma semana (o bilhete vale 14 dias). */
+export const TICKET_RENEW_BEFORE = 7 * 24 * 3600;
+
+let issuerKey = null;
+let testIssuer = null;
+/** Só os testes: uma chave pública (CryptoKey ECDSA) que também vale como emissora. */
+export function useTicketIssuerForTests(publicKey) { testIssuer = publicKey; }
+
+export function toBase64Url(bytes) {
+  return toBase64(bytes).replace(/=+$/, '').replace(/\+/g, '-').replace(/\//g, '_');
+}
+
+export function fromBase64Url(text) {
+  if (!/^[A-Za-z0-9_-]*$/.test(text)) throw new Error('base64url inválido');
+  const s = text.replace(/-/g, '+').replace(/_/g, '/');
+  return fromBase64(s + '='.repeat((4 - (s.length % 4)) % 4));
+}
+
+/** O resumo (hex maiúsculo) de uma chave pública: é a ela que o bilhete fica preso. */
+export async function keyHashOf(spki) {
+  return hex(await sha256(spki));
+}
+
+/** Vencimento (segundos Unix) sem conferir a assinatura; 0 se o bilhete estiver estragado. */
+export function ticketExpires(ticket) {
+  if (typeof ticket !== 'string' || !ticket || ticket.length > 2048) return 0;
+  const dot = ticket.indexOf('.');
+  if (dot <= 0) return 0;
+  try { return Number(JSON.parse(decoder.decode(fromBase64Url(ticket.slice(0, dot)))).x) || 0; } catch { return 0; }
+}
+
+/** Confere o bilhete de um aparelho cuja chave tem o resumo keyHash: { email } ou { email: null, reason }. */
+export async function verifyTicket(ticket, keyHash, now = Date.now() / 1000) {
+  if (typeof ticket !== 'string' || !ticket || ticket.length > 2048) return { email: null, reason: 'sem bilhete da conta' };
+  const broken = { email: null, reason: 'bilhete da conta estragado' };
+  const dot = ticket.indexOf('.');
+  if (dot <= 0 || dot === ticket.length - 1) return broken;
+  let payload;
+  let signature;
+  try {
+    payload = fromBase64Url(ticket.slice(0, dot));
+    signature = fromBase64Url(ticket.slice(dot + 1));
+  } catch {
+    return broken;
+  }
+  const algorithm = { name: 'ECDSA', hash: 'SHA-256' };
+  issuerKey ??= subtle.importKey('spki', fromBase64(TICKET_ISSUER_KEY), { name: 'ECDSA', namedCurve: 'P-256' }, false, ['verify']);
+  let signed = signature.length === 64 && await subtle.verify(algorithm, await issuerKey, signature, payload);
+  if (!signed && testIssuer && signature.length === 64) signed = await subtle.verify(algorithm, testIssuer, signature, payload);
+  if (!signed) return { email: null, reason: 'bilhete da conta com assinatura inválida' };
+  let body = null;
+  try { body = JSON.parse(decoder.decode(payload)); } catch { body = null; }
+  if (!body || body.v !== 1 || typeof body.e !== 'string' || !body.e) return broken;
+  if (String(body.k || '').toUpperCase() !== String(keyHash).toUpperCase()) return { email: null, reason: 'bilhete da conta de outro aparelho' };
+  if (now >= Number(body.x)) return { email: null, reason: 'bilhete da conta vencido' };
+  return { email: body.e, reason: '' };
+}
+
+/** A conta não está na lista de liberadas do dono do Ponte. */
+export class NotReleasedError extends PonteError {
+  constructor(email) {
+    super(`A conta ${email} ainda não foi liberada para usar o Ponte. Peça ao dono do Ponte para liberar este e-mail.`);
+    this.email = email;
+  }
+}
+
+/**
+ * Pede um bilhete ao servidor do Ponte para a chave de resumo keyHash, com o token de acesso da conta.
+ * sendLine(texto) manda uma mensagem pelo WebSocket do servidor e devolve a resposta.
+ */
+export async function requestTicket(sendLine, keyHash, accessToken) {
+  let reply;
+  try {
+    reply = String(await sendLine(`PONTE TICKET ${keyHash.toLowerCase()}\n${accessToken}`)).replace(/\r?\n$/, '');
+  } catch {
+    throw new PonteError('Sem conexão com o servidor do Ponte para conferir a conta.');
+  }
+  if (reply.startsWith('TICKET ') && (await verifyTicket(reply.slice(7), keyHash)).email) return reply.slice(7);
+  if (reply.startsWith('ERR naoliberado')) throw new NotReleasedError(reply.slice(16) || 'desta conta');
+  if (reply === 'ERR conta') throw new PonteError('A conta saiu deste aparelho. Entre de novo.');
+  if (reply === 'ERR servidor') throw new PonteError('O servidor do Ponte não conseguiu conferir a conta agora. Tente de novo em instantes.');
+  if (reply.startsWith('TICKET ')) throw new PonteError('O servidor do Ponte mandou um bilhete inválido.');
+  throw new PonteError('O servidor do Ponte ainda não confere contas (falta atualizar o servidor).');
 }
 
 /** ID de 9 dígitos derivado da chave pública (SPKI), a mesma conta do Windows. */
@@ -309,7 +401,7 @@ class SecureChannel {
     const key = (info, usage) => subtle.deriveKey(
       { name: 'HKDF', hash: 'SHA-256', salt, info: encoder.encode(info) }, base, { name: 'AES-GCM', length: 256 }, false, [usage]);
     const channel = new SecureChannel(ws, queue, await key('ponte-web-1 c2s', 'encrypt'), await key('ponte-web-1 s2c', 'decrypt'));
-    return { channel, certificateHash, fingerprint };
+    return { channel, certificateHash, fingerprint, spki };
   }
 
   // Decifra os registros na ordem em que chegam.
@@ -379,14 +471,25 @@ class SecureChannel {
 export async function connect(targetText, options) {
   const target = parseTarget(targetText);
   if (!target) throw new PonteError('Use o ID de 9 dígitos do computador. No navegador não dá para conectar pelo IP.');
+  // 1.17.0: sem conta liberada não se acessa nada.
+  if (!(await verifyTicket(options.ticket, await keyHashOf(options.identity.spki))).email)
+    throw new PonteError('Para acessar outro aparelho, entre numa conta liberada do Ponte (botão Conta).');
   const { ws, queue } = await openRelay(options.relayUrl, target.id);
   try {
-    const { channel, certificateHash, fingerprint } = await SecureChannel.open(ws, queue, target.id, options.knownFingerprint, options.confirmNewIdentity);
+    const { channel, certificateHash, fingerprint, spki } = await SecureChannel.open(ws, queue, target.id, options.knownFingerprint, options.confirmNewIdentity);
     await channel.sendJson(Msg.HELLO, {
       Name: options.deviceName, User: options.userName, Version: options.version,
-      Key: toBase64(options.identity.spki), Caps: Caps.CURSOR | Caps.AUDIO,
+      Key: toBase64(options.identity.spki), Caps: Caps.CURSOR | Caps.AUDIO, Ticket: options.ticket || null,
     });
     const challenge = await withTimeout(channel.expectJson(Msg.CHALLENGE), 20000, 'O outro computador não respondeu a tempo.');
+    // O outro lado também precisa estar numa conta liberada. Sem bilhete, ele é anterior à 1.17.0 (e responder sem
+    // senha abriria um pedido de aceite lá) ou ninguém entrou na conta nele: para aqui mesmo.
+    const hostAccount = await verifyTicket(challenge.Ticket, await keyHashOf(spki));
+    if (!hostAccount.email) {
+      throw new PonteError(challenge.Ticket == null
+        ? 'O outro aparelho não está numa conta liberada do Ponte (ou ainda não tem a versão 1.17.0). Alguém precisa abrir o Ponte nele, atualizar e entrar na conta.'
+        : `O outro aparelho mandou um bilhete de conta que não vale (${hostAccount.reason}). Alguém precisa sair e entrar de novo na conta nele.`);
+    }
     const nonce = fromBase64(challenge.Nonce || '');
     if (nonce.length !== 32) throw new PonteError('O outro computador enviou um desafio inválido.');
     // A assinatura vai sempre: é ela que deixa o outro lado reconhecer este navegador, agora ou depois.
@@ -406,7 +509,9 @@ export async function connect(targetText, options) {
     const result = await withTimeout(channel.expectJson(Msg.AUTH_RESULT), 75000, 'O outro computador não respondeu a tempo.');
     if (!result.Ok) throw new PonteError(result.Reason || 'Conexão recusada.');
     channel.limit = 64 * 1024 * 1024;
-    return new Session(channel, target, result, fingerprint);
+    const session = new Session(channel, target, result, fingerprint);
+    session.hostAccount = hostAccount.email;
+    return session;
   } catch (error) {
     ws.close();
     throw error instanceof PonteError ? error : new PonteError('A conexão caiu durante a identificação.');
@@ -429,6 +534,10 @@ export class Session {
     this.hasSound = (this.hostCaps & Caps.AUDIO) !== 0;
     /** Do outro lado está um celular (1.14.0): há Voltar, Início e Apps. */
     this.isPhone = (this.hostCaps & Caps.PHONE) !== 0;
+    /** O computador manda Ctrl+Alt+Del de verdade (1.17.0, com o serviço do Ponte instalado lá). */
+    this.hasSecureAttention = (this.hostCaps & Caps.SECURE_ATTENTION) !== 0;
+    /** A conta liberada em que o outro lado está (1.17.0). */
+    this.hostAccount = '';
   }
 
   /** Lê até a sessão acabar. listener: onFrame, onPointer, onPointerPosition, onSound, onClipboard, onNotice, onClosed. */
@@ -470,6 +579,11 @@ export class Session {
     p[4] = action;
     view.setInt16(5, Math.max(-32768, Math.min(32767, wheel | 0)), true);
     this.channel.send(Msg.MOUSE, p);
+  }
+
+  /** Ctrl+Alt+Del no computador; quando não dá (sem o serviço, por exemplo), o motivo volta como aviso. */
+  sendSecureAttention() {
+    this.channel.send(Msg.SECURE_ATTENTION);
   }
 
   sendKey(virtualKey, up, extended = false) {

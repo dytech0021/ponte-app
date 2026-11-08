@@ -143,7 +143,7 @@ class SessionActivity : Activity() {
         val target = Target.parse(targetText)
         targetKey = target.key
         val saved = store.findSaved(target.key)
-        val config = ClientConfig(store.relayServer, store.relayKey, store.deviceName, "Android", BuildConfig.VERSION_NAME)
+        val config = ClientConfig(store.relayServer, store.relayKey, store.deviceName, "Android", BuildConfig.VERSION_NAME, store.ticket)
         val connected = try {
             PonteClient.connect(config, targetText, DeviceIdentity.get(), store.knownFingerprint(target.key), saved?.autoAccess == true, Prompts(saved?.autoAccess == true))
         } catch (e: PonteException) {
@@ -481,6 +481,12 @@ class SessionActivity : Activity() {
         PopupMenu(this, anchor).apply {
             val shortcuts = menu.addSubMenu("Atalhos de teclado")
             fun item(title: String, vararg keys: Int) = shortcuts.add(title).setOnMenuItemClickListener { keyboard.combo(*keys); true }
+            // Ctrl+Alt+Del de verdade (1.17.0): o computador pede ao serviço do Ponte, que é quem pode abrir a tela segura.
+            if (!current.isPhone) shortcuts.add("Ctrl+Alt+Del").setOnMenuItemClickListener {
+                if (current.hasSecureAttention) current.sendSecureAttention()
+                else showNotice("O Ctrl+Alt+Del só funciona quando o computador tem o Ponte 1.17.0 ou mais novo com o serviço instalado.")
+                true
+            }
             item("Copiar (Ctrl+C)", Vk.CONTROL, c)
             item("Colar (Ctrl+V)", Vk.CONTROL, v)
             item("Recortar (Ctrl+X)", Vk.CONTROL, x)
@@ -541,6 +547,7 @@ class SessionActivity : Activity() {
             .setMessage(
                 "Endereço: ${current.target.shown}\n" +
                     "Ponte de lá: $version\n" +
+                    "Conta de lá: ${current.hostAccount.ifEmpty { "-" }}\n" +
                     "Entrada sem aprovação: ${if (current.paired) "autorizada" else "não autorizada"}\n" +
                     "Som: ${if (!current.hasSound) "o computador não transmite" else if (soundOn) "ligado" else "desligado"}\n\n" +
                     "Identidade do computador:\n${current.fingerprint.chunked(4).joinToString(" ")}"

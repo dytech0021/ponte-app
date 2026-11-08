@@ -120,17 +120,6 @@
             </LinearLayout>
         </LinearLayout>
 
-        <!-- As lives e os amigos saíram do Ponte e agora ficam no Exilados (abre no navegador). -->
-        <Button
-            android:id="@+id/exilados"
-            style="@style/BotaoSecundario"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:layout_marginTop="12dp"
-            android:paddingStart="16dp"
-            android:paddingEnd="16dp"
-            android:text="Lives no Exilados" />
-
         <!-- Deixar este celular ser acessado por um computador, outro celular ou o navegador (1.14.0). -->
         <Button
             android:id="@+id/acesso"

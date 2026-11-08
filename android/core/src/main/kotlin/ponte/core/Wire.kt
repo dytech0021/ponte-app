@@ -27,6 +27,8 @@ object Msg {
     const val FILE_END = 42
     const val SETTINGS = 50
     const val NOTICE = 60
+    /** Ctrl+Alt+Del no computador acessado (1.17.0), sem conteúdo. Só quando ele oferece [Caps.SECURE_ATTENTION]. */
+    const val SECURE_ATTENTION = 74
     const val BYE = 99
 }
 
@@ -40,6 +42,8 @@ object Caps {
     const val AUDIO = 4
     /** Só no AuthResult (1.14.0): quem é acessado é um celular. Texto vai como texto, e há Voltar, Início e Apps. */
     const val PHONE = 16
+    /** Só no AuthResult (1.17.0): o computador acessado manda Ctrl+Alt+Del de verdade (com o serviço instalado). */
+    const val SECURE_ATTENTION = 128
 }
 
 /**

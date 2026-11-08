@@ -5,7 +5,7 @@
 import * as P from './ponte.js';
 import { Account, SITE } from './conta.js';
 
-const VERSION = '1.14.0';
+const VERSION = '1.17.0';
 const { MouseAction } = P;
 
 const $ = (id) => document.getElementById(id);
@@ -37,10 +37,11 @@ const RELAY_URL = (() => {
 // som: ouvir o computador na sessão. telaCheia: a sessão abre sem a barra de comandos (a última escolha).
 // tema: 'auto' (o do aparelho), 'claro' ou 'escuro'. conta: { email, userId, token (cifrado) } ou null.
 // contaRemover: chaves removidas aqui que ainda faltam apagar da conta. inatividade: minutos sem uso até o computador
-// encerrar a sessão (0 é nunca); null deixa valer o tempo configurado no Ponte de lá.
+// encerrar a sessão (0 é nunca); null deixa valer o tempo configurado no Ponte de lá. bilhete: o da conta liberada
+// (1.17.0), preso à chave deste navegador.
 const DEFAULTS = {
   nome: '', salvos: [], recentes: [], identidades: {}, qualidade: 60, touchpad: false, dicaInstalar: true,
-  som: true, telaCheia: false, tema: 'auto', conta: null, contaRemover: [], inatividade: null,
+  som: true, telaCheia: false, tema: 'auto', conta: null, contaRemover: [], inatividade: null, bilhete: '',
 };
 
 // As escolhas de tempo sem uso, em minutos; 'la' é o tempo do computador acessado.
@@ -56,6 +57,7 @@ const state = (() => {
   if (!s.identidades || typeof s.identidades !== 'object') s.identidades = {};
   if (!Array.isArray(s.contaRemover)) s.contaRemover = [];
   if (!s.conta || typeof s.conta !== 'object') s.conta = null;
+  if (typeof s.bilhete !== 'string' || !s.conta) s.bilhete = '';
   if (!IDLE_CHOICES.some(([value]) => value === String(s.inatividade))) s.inatividade = null;
   return s;
 })();
@@ -543,14 +545,8 @@ async function showMenu() {
     await message('Ponte no navegador',
       `Versão ${VERSION}\n\nEndereço deste aparelho: ${id}\nÉ com esse número e o nome "${deviceName()}" que ele aparece na lista ` +
       'de computadores autorizados do Ponte no computador.\n\nA conexão é cifrada de ponta a ponta entre este aparelho e o ' +
-      'computador: o servidor só repassa os dados, sem conseguir ler. Este aparelho só acessa; ele não pode ser acessado.\n\n' +
-      'As lives e os amigos ficam no Exilados: filabox3d.com.br/exilados');
+      'computador: o servidor só repassa os dados, sem conseguir ler. Este aparelho só acessa; ele não pode ser acessado.');
   }
-}
-
-/** As lives e os amigos saíram do Ponte e agora ficam no Exilados (abre fora do Ponte, como no Android). */
-function openExilados() {
-  window.open(`${SITE}/exilados/`, '_blank', 'noopener');
 }
 
 // ---------- versão nova ----------
@@ -597,7 +593,9 @@ function updateNow() {
   location.reload();
 }
 
-// ---------- conta (opcional) ----------
+// ---------- conta (obrigatória desde a 1.17.0) ----------
+// O Ponte só funciona com uma conta liberada pelo dono. Ao entrar, o servidor do Ponte confere a conta e dá um
+// bilhete preso à chave deste navegador, que vale 14 dias e é renovado quando falta menos de uma semana.
 
 let account = null;
 let accountLoaded = false;
@@ -626,28 +624,87 @@ async function keepAccount(a) {
   save();
 }
 
+function ticketOk() {
+  return !!state.conta && P.ticketExpires(state.bilhete) > Date.now() / 1000;
+}
+
 function showAccount() {
-  $('conta').textContent = state.conta ? `Conta: ${state.conta.email}` : 'Entrar na conta';
+  const button = $('conta');
+  const ok = ticketOk();
+  button.textContent = !state.conta ? 'Entrar na conta (obrigatório)'
+    : ok ? `Conta: ${state.conta.email}` : `Conta: ${state.conta.email} (não liberada)`;
+  button.style.color = ok ? '' : 'var(--perigo)';
+}
+
+/** Pede ao servidor do Ponte o bilhete desta conta para a chave deste navegador. */
+async function fetchTicket(a) {
+  const hash = await P.keyHashOf((await identity()).spki);
+  return P.requestTicket((line) => relayLine(line, 25000), hash, await a.accessToken());
+}
+
+let lastTicketTry = 0;
+
+/** Renova o bilhete quando falta menos de uma semana (ou na marra). Sem internet, o atual vale até vencer. */
+async function renewTicket(force = false) {
+  const a = await currentAccount();
+  if (!a) return;
+  if (!force && P.ticketExpires(state.bilhete) - Date.now() / 1000 > P.TICKET_RENEW_BEFORE) return;
+  if (!force && Date.now() - lastTicketTry < 10 * 60 * 1000) return;
+  lastTicketTry = Date.now();
+  try {
+    state.bilhete = await fetchTicket(a);
+    save();
+    showAccount();
+    if (force) toast('Conta liberada: o Ponte está pronto para acessar.');
+  } catch (error) {
+    const text = error?.message || 'Não foi possível conferir a conta.';
+    if (error instanceof P.NotReleasedError) {
+      state.bilhete = '';
+      save();
+    }
+    showAccount();
+    if (text.startsWith('A conta saiu')) signOut(text);
+    else if (force || !ticketOk()) await message('Conta', text);
+  }
+}
+
+/** Ao abrir: sem conta, o Ponte já pede o login; com conta, o bilhete é renovado se preciso. */
+async function startupAccount() {
+  if (await currentAccount()) renewTicket();
+  else showSignIn(true);
 }
 
 async function accountClicked() {
   const a = await currentAccount();
-  if (!a) return showSignIn();
+  if (!a) return showSignIn(true);
   const { value } = await ask({
     title: `Conta: ${a.email}`,
     options: [
+      ...(ticketOk() ? [] : [{ label: 'Conferir a conta de novo', value: 'conferir' }]),
       { label: 'Sincronizar a lista agora', value: 'sincronizar' },
       { label: 'Criar ou gerenciar a conta no FilaBox', value: 'site' },
       { label: 'Sair da conta neste aparelho', value: 'sair', kind: 'perigo' },
     ],
     buttons: [{ label: 'Fechar', value: null }],
   });
-  if (value === 'sincronizar') syncAccount(true);
+  if (value === 'conferir') renewTicket(true);
+  else if (value === 'sincronizar') syncAccount(true);
   else if (value === 'site') window.open(`${SITE}/login`, '_blank', 'noopener');
   else if (value === 'sair') signOut();
 }
 
-async function signedIn(a) {
+async function signedIn(a, ticket = null) {
+  if (!ticket) {
+    try {
+      ticket = await fetchTicket(a);
+    } catch (error) {
+      // Conta fora da lista (ou sem como conferir agora): não fica gravada neste aparelho.
+      a.signOut();
+      await message('Conta', error?.message || 'Não foi possível conferir a conta.');
+      return;
+    }
+  }
+  state.bilhete = ticket;
   a.onTokenChanged = keepAccount;
   account = a;
   accountLoaded = true;
@@ -656,15 +713,16 @@ async function signedIn(a) {
   syncAccount(true, `Você entrou como ${a.email}.`);
 }
 
-/** A conta que acabou de entrar pela janela de e-mail e senha. */
+/** A conta que acabou de entrar pela janela de e-mail e senha, e o bilhete dela. */
 let signingIn = null;
+let signingTicket = null;
 
-/** Entrar com a conta do FilaBox: e-mail e senha, ou Google. Entrar é opcional. */
-async function showSignIn() {
+/** Entrar com a conta do FilaBox: e-mail e senha, ou Google. Obrigatório desde a 1.17.0 (só contas liberadas). */
+async function showSignIn(required = false) {
   const { value, fields } = await ask({
-    title: 'Entrar com a conta do FilaBox',
-    message: 'Os computadores que você salvar ficam na conta e aparecem em qualquer aparelho em que você entrar. ' +
-      'Cada conta vê só os próprios. Entrar é opcional.',
+    title: required ? 'Entre na sua conta para usar o Ponte' : 'Entrar com a conta do FilaBox',
+    message: 'O Ponte só funciona com uma conta liberada pelo dono do Ponte, dos dois lados: em quem acessa e no aparelho ' +
+      'acessado. A conta é a mesma do FilaBox, e os computadores salvos ficam nela.',
     fields: [
       { id: 'email', label: 'E-mail', type: 'email', inputmode: 'email' },
       { id: 'senha', label: 'Senha', type: 'password' },
@@ -674,15 +732,20 @@ async function showSignIn() {
     validate: async (f, chosen) => {
       if (chosen !== 'entrar') return '';
       if (!f.email.trim() || !f.senha) return 'Preencha o e-mail e a senha.';
+      let entered = null;
       try {
-        signingIn = await Account.signIn(f.email, f.senha);
+        entered = await Account.signIn(f.email, f.senha);
+        signingTicket = await fetchTicket(entered);
+        signingIn = entered;
         return '';
       } catch (error) {
+        // Conta fora da lista (ou sem como conferir agora): sai dela na hora.
+        entered?.signOut();
         return error?.message || 'Não foi possível entrar.';
       }
     },
     buttons: [
-      { label: 'Cancelar', value: null },
+      { label: required ? 'Agora não' : 'Cancelar', value: null },
       { label: 'Google', value: 'google' },
       { label: 'Entrar', value: 'entrar', kind: 'forte', submit: true },
     ],
@@ -690,7 +753,7 @@ async function showSignIn() {
   if (value === 'entrar' && signingIn) {
     const a = signingIn;
     signingIn = null;
-    await signedIn(a);
+    await signedIn(a, signingTicket);
   } else if (value === 'google') {
     startGoogle();
   }
@@ -806,6 +869,7 @@ function signOutLocally() {
   mine.forEach((c) => dropThumbnail(c.key));
   state.contaRemover = [];
   state.conta = null;
+  state.bilhete = '';
   save();
   account = null;
   showAccount();
@@ -816,7 +880,7 @@ function signOut(reason) {
   signOutLocally();
   leaving?.signOut();
   if (!current) renderHome();
-  message('Conta', reason || 'Você saiu da conta neste aparelho. Os computadores dela não aparecem mais aqui.');
+  message('Conta', reason || 'Você saiu da conta neste aparelho. Sem conta, o Ponte não acessa outros aparelhos.');
 }
 
 // ---------- bolinha de online ----------
@@ -824,13 +888,13 @@ function signOut(reason) {
 let presenceBusy = false;
 
 /** Uma linha para o servidor de retransmissão pelo WebSocket, e a resposta dele. */
-function relayLine(line) {
+function relayLine(line, timeoutMs = 10000) {
   return new Promise((resolve, reject) => {
     let ws;
     try { ws = new WebSocket(RELAY_URL); } catch (error) { reject(error); return; }
     ws.binaryType = 'arraybuffer';
     let answer = '';
-    const timer = setTimeout(() => ws.close(), 10000);
+    const timer = setTimeout(() => ws.close(), timeoutMs);
     ws.onopen = () => ws.send(line);
     ws.onmessage = (event) => { answer += typeof event.data === 'string' ? event.data : new TextDecoder().decode(event.data); };
     ws.onerror = () => {};
@@ -1108,6 +1172,17 @@ async function connectTo(text) {
     return;
   }
   if (current || connecting) return;
+  // 1.17.0: sem conta liberada não se acessa nada.
+  if (!state.conta) {
+    showAddressError('Entre numa conta liberada para acessar outro aparelho.');
+    showSignIn(true);
+    return;
+  }
+  if (!ticketOk()) {
+    showAddressError('A conta ainda não está liberada para usar o Ponte. Conferindo de novo...');
+    renewTicket(true);
+    return;
+  }
   showAddressError('');
   // Ainda dentro do toque em Conectar: é o que libera o som no iPhone.
   if (state.som) sound.unlock();
@@ -1119,7 +1194,7 @@ async function connectTo(text) {
   try {
     session = await P.connect(target.shown, {
       relayUrl: RELAY_URL, deviceName: deviceName(), userName: 'Navegador', version: VERSION,
-      identity: await identity(), knownFingerprint: state.identidades[target.key] || null, remember: !!saved?.autoAccess,
+      identity: await identity(), ticket: state.bilhete, knownFingerprint: state.identidades[target.key] || null, remember: !!saved?.autoAccess,
       askPassword: () => askPassword(target.shown),
       confirmNewIdentity: async () => (await ask({
         title: 'A identidade mudou',
@@ -2029,12 +2104,24 @@ const SHORTCUTS = [
 ];
 
 async function chooseShortcut(c) {
+  const options = SHORTCUTS.map(([label], i) => ({ label, value: i }));
+  // Ctrl+Alt+Del de verdade (1.17.0): o computador pede ao serviço do Ponte, que é quem pode abrir a tela segura.
+  if (!c.session.isPhone) options.unshift({ label: 'Ctrl+Alt+Del', value: 'sas' });
   const { value } = await ask({
     title: 'Atalhos de teclado',
-    options: SHORTCUTS.map(([label], i) => ({ label, value: i })),
+    options,
     buttons: [{ label: 'Fechar', value: null }],
   });
   if (value === null || current !== c) return;
+  if (value === 'sas') {
+    if (c.session.hasSecureAttention) {
+      c.session.sendSecureAttention();
+      toast('Ctrl+Alt+Del enviado.');
+    } else {
+      await message('Ctrl+Alt+Del', 'O Ctrl+Alt+Del só funciona quando o computador tem o Ponte 1.17.0 ou mais novo com o serviço instalado.');
+    }
+    return;
+  }
   const [label, ...keys] = SHORTCUTS[value];
   c.keyboard.combo(...keys);
   toast(`${label} enviado.`);
@@ -2092,7 +2179,7 @@ async function chooseScreen(c) {
 async function aboutConnection(c) {
   const s = c.session;
   await message(s.hostName || s.target.shown,
-    `ID: ${s.target.shown}\nPonte lá: ${s.hostVersion || 'versão antiga'}\n` +
+    `ID: ${s.target.shown}\nPonte lá: ${s.hostVersion || 'versão antiga'}\nConta de lá: ${s.hostAccount || '-'}\n` +
     `${s.paired ? 'Este aparelho está autorizado: entra sem aprovação.' : 'Este aparelho ainda não está autorizado a entrar direto.'}\n` +
     `Som: ${!s.hasSound ? 'o computador não transmite' : c.soundOn ? 'ligado' : 'desligado'}\n\n` +
     `Identidade do computador:\n${s.fingerprint.slice(0, 32).replace(/(.{4})/g, '$1 ').trim()}…\n\n` +
@@ -2156,7 +2243,6 @@ function init() {
   $('b-recolher').onclick = () => setCollapsed(true);
   $('b-abrir').onclick = () => setCollapsed(false);
   $('conta').onclick = accountClicked;
-  $('exilados').onclick = openExilados;
   $('atualizar-agora').onclick = updateNow;
   document.addEventListener('keydown', (event) => {
     if (current && !$('dialogo').open) handleKeydown(event);
@@ -2171,6 +2257,7 @@ function init() {
     checkPresence();
     checkUpdate();
     if (!current && Date.now() - lastSync > 60000) syncAccount();
+    if (!current) renewTicket();
   });
 
   if (isIos && !standalone && state.dicaInstalar) $('instalar').hidden = false;
@@ -2196,7 +2283,10 @@ function init() {
   setTimeout(() => checkUpdate(), 5000);
   // Volta do login com Google (?code=) ou, sem ele, a conferência da lista com a conta ao abrir.
   if (/[?&#](code|error)=/.test(location.search + location.hash)) finishGoogle();
-  else syncAccount();
+  else {
+    syncAccount();
+    startupAccount();
+  }
 }
 
 init();

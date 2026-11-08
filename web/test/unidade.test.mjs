@@ -6,6 +6,7 @@ import {
   idFromSpki, formatId, parseTarget, passwordProof, pairingMessage, parseFrame, parsePointer, versionAtLeast,
   toBase64, fromBase64, newIdentity, PonteError, decodeAudio, Session, Msg,
 } from '../ponte.js';
+import * as P from '../ponte.js';
 
 const enc = new TextEncoder();
 const hex = (bytes) => Buffer.from(bytes).toString('hex');
@@ -115,4 +116,39 @@ test('motivo do encerramento vem na despedida do computador', async () => {
   }
   // Sem motivo (Ponte anterior à 1.13.0), fica o de sempre.
   assert.deepEqual(reasons, [told, 'O outro computador encerrou a sessão.']);
+});
+
+test('bilhete da conta: só vale assinado, no aparelho dele e dentro da validade (1.17.0)', async () => {
+  const subtle = globalThis.crypto.subtle;
+  const issuer = await subtle.generateKey({ name: 'ECDSA', namedCurve: 'P-256' }, false, ['sign', 'verify']);
+  P.useTicketIssuerForTests(issuer.publicKey);
+  const enc = new TextEncoder();
+  const sign = async (body, key = issuer.privateKey) => {
+    const payload = enc.encode(JSON.stringify(body));
+    return `${P.toBase64Url(payload)}.${P.toBase64Url(new Uint8Array(await subtle.sign({ name: 'ECDSA', hash: 'SHA-256' }, key, payload)))}`;
+  };
+  const hash = await P.keyHashOf(new Uint8Array([1, 2, 3]));
+  const later = Math.floor(Date.now() / 1000) + 3600;
+  const good = await sign({ v: 1, e: 'a@b.c', k: hash, x: later });
+  assert.equal((await P.verifyTicket(good, hash)).email, 'a@b.c');
+  assert.equal((await P.verifyTicket(good, hash.toLowerCase())).email, 'a@b.c');
+  assert.equal(P.ticketExpires(good), later);
+  assert.equal((await P.verifyTicket(good, '00'.repeat(32))).reason, 'bilhete da conta de outro aparelho');
+  assert.equal((await P.verifyTicket(await sign({ v: 1, e: 'a@b.c', k: hash, x: 10 }), hash)).reason, 'bilhete da conta vencido');
+  const forged = P.toBase64Url(enc.encode(JSON.stringify({ v: 1, e: 'intruso@x.y', k: hash, x: later }))) + good.slice(good.indexOf('.'));
+  assert.equal((await P.verifyTicket(forged, hash)).email, null);
+  const stranger = await subtle.generateKey({ name: 'ECDSA', namedCurve: 'P-256' }, false, ['sign', 'verify']);
+  assert.equal((await P.verifyTicket(await sign({ v: 1, e: 'a@b.c', k: hash, x: later }, stranger.privateKey), hash)).email, null);
+  for (const bad of ['', 'lixo', 'a.b', '!!.??', null, undefined]) assert.equal((await P.verifyTicket(bad, hash)).email, null);
+
+  // O pedido ao servidor: a linha que sai e o que cada resposta vira.
+  let sent = '';
+  const reply = (text) => async (line) => { sent = line; return text; };
+  assert.equal(await P.requestTicket(reply(`TICKET ${good}\n`), hash, 'token-de-acesso'), good);
+  assert.equal(sent, `PONTE TICKET ${hash.toLowerCase()}\ntoken-de-acesso`);
+  await assert.rejects(P.requestTicket(reply('ERR naoliberado x@y.z'), hash, 't'), (e) => e instanceof P.NotReleasedError && e.email === 'x@y.z');
+  await assert.rejects(P.requestTicket(reply('ERR conta'), hash, 't'), /A conta saiu/);
+  await assert.rejects(P.requestTicket(reply(`TICKET ${forged}`), hash, 't'), /bilhete inválido/);
+  await assert.rejects(P.requestTicket(async () => { throw new Error('caiu'); }, hash, 't'), /Sem conexão/);
+  P.useTicketIssuerForTests(null);
 });

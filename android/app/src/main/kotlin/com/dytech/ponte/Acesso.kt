@@ -39,6 +39,7 @@ class AcessoStore(context: Context) : HostConfig {
 
     override val relayServer: String get() = store.relayServer
     override val relayKey: String get() = store.relayKey
+    override val ticket: String get() = store.hostTicket
     override val hostName: String get() = store.deviceName
     override val version: String get() = BuildConfig.VERSION_NAME
     override val passwordSalt: String get() = prefs.getString("sal", "") ?: ""

@@ -37,6 +37,14 @@ const WS_PORT = parseInt(process.env.PONTE_WS_PORT || '0', 10);
 const WS_BIND = process.env.PONTE_WS_BIND || '127.0.0.1';
 const WS_MAX_MESSAGE = 1024 * 1024;   // o navegador só manda mouse, teclas e texto: mensagens pequenas
 const WS_PING_MS = 25000;             // mantém a conexão viva no nginx e nas redes móveis
+// Bilhete da conta (1.17.0): só quem entrou numa conta liberada usa o Ponte. O servidor confere a conta no
+// Supabase do FilaBox e assina "esta chave de aparelho é da conta X, liberada até tal dia"; os dois lados de
+// cada sessão conferem o bilhete do outro com a chave pública que vai dentro do programa.
+const TICKET_KEY = process.env.PONTE_TICKET_KEY || '';          // PKCS#8 (DER em base64) de uma chave EC P-256
+const SUPABASE_URL = process.env.PONTE_SUPABASE_URL || 'https://kobtvgqnitdeviddvymm.supabase.co';
+const SUPABASE_KEY = process.env.PONTE_SUPABASE_KEY || 'sb_publishable_S0LPicuJdLg-XsrxGiN0Ug_tIDZ4sLo';
+const TICKET_DAYS = 14;
+const MAX_TOKEN = 4096;
 
 const hosts = new Map();     // id -> conexão de controle do computador registrado
 const pending = new Map();   // token -> { viewer, takeRest, timer }
@@ -185,6 +193,64 @@ function streamUpdateFile(socket, name, maxBytes) {
   });
 }
 
+let ticketSigner = null;
+try {
+  if (TICKET_KEY) ticketSigner = crypto.createPrivateKey({ key: Buffer.from(TICKET_KEY, 'base64'), format: 'der', type: 'pkcs8' });
+} catch (error) {
+  console.error(`PONTE_TICKET_KEY inválida: ${error.message}`);
+}
+
+const base64url = (buffer) => buffer.toString('base64').replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+
+// O que o Supabase diz da conta dona do token: { email, liberado, admin }, ou { erro }.
+async function accountFor(token) {
+  try {
+    const response = await fetch(`${SUPABASE_URL}/rest/v1/rpc/ponte_conta`, {
+      method: 'POST',
+      headers: { apikey: SUPABASE_KEY, Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+      body: '{}',
+      signal: AbortSignal.timeout(10000),
+    });
+    if (response.status === 401 || response.status === 403) return { erro: 'conta' };
+    if (!response.ok) return { erro: 'servidor' };
+    const account = await response.json();
+    if (!account || typeof account.email !== 'string' || !account.email) return { erro: 'conta' };
+    return account;
+  } catch {
+    return { erro: 'servidor' };
+  }
+}
+
+// Bilhete = base64url(JSON) "." base64url(assinatura ECDSA P-256 com SHA-256, 64 bytes r||s).
+function signTicket(email, keyHash) {
+  const payload = Buffer.from(JSON.stringify({
+    v: 1, e: email, k: keyHash.toUpperCase(), x: Math.floor(Date.now() / 1000) + TICKET_DAYS * 86400,
+  }), 'utf8');
+  const signature = crypto.sign('sha256', payload, { key: ticketSigner, dsaEncoding: 'ieee-p1363' });
+  return `${base64url(payload)}.${base64url(signature)}`;
+}
+
+// "PONTE TICKET <sha256 da chave do aparelho>" e, na linha seguinte, o token de acesso da conta.
+// Resposta: "TICKET <bilhete>", "ERR naoliberado <email>", "ERR conta" (token vencido ou inválido) ou "ERR servidor".
+async function ticketLine(keyHash, token) {
+  if (!ticketSigner) return 'ERR servidor\n';
+  if (!/^[A-Za-z0-9._-]{20,4096}$/.test(token)) return 'ERR conta\n';
+  const account = await accountFor(token);
+  if (account.erro) return `ERR ${account.erro}\n`;
+  if (account.liberado !== true) return `ERR naoliberado ${String(account.email).replace(/[^\x21-\x7e]/g, '')}\n`;
+  return `TICKET ${signTicket(account.email, keyHash)}\n`;
+}
+
+function ticketHandler(socket, keyHash) {
+  let asked = false;
+  return (line) => {
+    if (asked) return;
+    asked = true;
+    socket.setTimeout(20000, () => socket.destroy());
+    ticketLine(keyHash, line.trim()).then((answer) => { if (!socket.destroyed) socket.end(answer); });
+  };
+}
+
 // Compara pelo resumo das duas chaves, para o tempo da comparação não revelar nada sobre a chave certa.
 function keyMatches(given) {
   const digest = (text) => crypto.createHash('sha256').update(text).digest();
@@ -221,7 +287,7 @@ const server = net.createServer((socket) => {
       return socket.end(onlineLine(status[1]));
     }
 
-    const match =/^PONTE (HOST|CONNECT|ACCEPT|MANIFEST|DOWNLOAD|ANDROID_MANIFEST|ANDROID_DOWNLOAD|VIDEO) ([0-9a-f]{1,64})(?: ([A-Za-z0-9_-]{1,128}))?$/.exec(line);
+    const match =/^PONTE (HOST|CONNECT|ACCEPT|MANIFEST|DOWNLOAD|ANDROID_MANIFEST|ANDROID_DOWNLOAD|VIDEO|TICKET) ([0-9a-f]{1,64})(?: ([A-Za-z0-9_-]{1,128}))?$/.exec(line);
     if (!match) return socket.destroy();
     const [, command, argument, key] = match;
     if (KEY && !keyMatches(key)) return refuse(socket, 'key');
@@ -230,7 +296,9 @@ const server = net.createServer((socket) => {
     if (command === 'ANDROID_MANIFEST' && argument === '0') return sendUpdateFile(socket, 'android-manifest.json', 8192);
     if (command === 'ANDROID_DOWNLOAD' && argument === '0') return sendUpdateFile(socket, 'Ponte.apk', MAX_UPDATE_BYTES);
     if (command === 'VIDEO' && /^[0-9a-f]{64}$/.test(argument)) return streamUpdateFile(socket, `video-${argument}.br`, MAX_VIDEO_BYTES);
-    if (command === 'HOST' && /^\d{9}$/.test(argument)) {
+    if (command === 'TICKET' && /^[0-9a-f]{64}$/.test(argument)) {
+      hostHandler = ticketHandler(socket, argument);
+    } else if (command === 'HOST' && /^\d{9}$/.test(argument)) {
       hostHandler = registerHost(socket, argument);
     } else if (command === 'CONNECT' && /^\d{9}$/.test(argument)) {
       socket.setTimeout(0);
@@ -378,6 +446,11 @@ function acceptWebSocket(request, socket) {
     const text = message.toString('latin1');
     const status = /^PONTE STATUS (\d{9}(?:,\d{9}){0,99})\n?$/.exec(text);
     if (status) return peer.end(Buffer.from(onlineLine(status[1]), 'latin1'));
+    // Bilhete da conta para o Ponte no navegador: "PONTE TICKET <hash>\n<token>" numa mensagem só.
+    const ticket = /^PONTE TICKET ([0-9a-f]{64})\n([A-Za-z0-9._-]{20,4096})\n?$/.exec(text);
+    if (ticket) {
+      return ticketLine(ticket[1], ticket[2]).then((answer) => { if (!peer.destroyed) peer.end(Buffer.from(answer, 'latin1')); });
+    }
     const match = /^PONTE CONNECT (\d{9})(?: [A-Za-z0-9_-]{1,128})?\n?$/.exec(text);
     if (!match) return peer.destroy();
     connectViewer(peer, match[1], () => Buffer.alloc(0));

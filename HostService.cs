@@ -475,6 +475,18 @@ internal sealed class HostSession(Channel channel, HelloMsg hello, string remote
         catch (Exception ex) when (ex is IOException or OperationCanceledException or ObjectDisposedException) { }
     }
 
+    // Ctrl+Alt+Del pelo serviço; se não der, quem acessa fica sabendo o porquê.
+    private async void SecureAttention(CancellationToken ct)
+    {
+        try
+        {
+            SessionLog.Write($"controlado: Ctrl+Alt+Del pedido por {PeerName}");
+            string? problem = await WindowsHost.SecureAttentionAsync(ct);
+            if (problem is not null) await channel.SendAsync(Msg.Notice, Encoding.UTF8.GetBytes(problem), ct);
+        }
+        catch (Exception ex) when (ex is IOException or OperationCanceledException or ObjectDisposedException) { }
+    }
+
     private async Task ReadLoopAsync(CancellationToken ct)
     {
         using var files = new FileReceiver(receiveDir);
@@ -543,6 +555,10 @@ internal sealed class HostSession(Channel channel, HelloMsg hello, string remote
                 case Msg.Bye:
                     _byeReceived = true;
                     return;
+                case Msg.SecureAttention when p.Length == 0:
+                    Touch();
+                    SecureAttention(ct);
+                    break;
                 case Msg.Ping when p.Length == 8:
                     await channel.SendAsync(Msg.Pong, p, ct);
                     break;
@@ -807,8 +823,15 @@ internal sealed class HostService(AppConfig config, bool standalone = false) : I
             byte[]? viewerKey = TryKey(hello.Key);
             string keyHash = viewerKey is null ? "" : Security.KeyHash(viewerKey);
             bool trusted = viewerKey is not null && config.IsTrusted(keyHash);
-            bool passwordOpen = config.HasPassword && DateTime.UtcNow >= _lockedUntil;
-            await channel.SendJsonAsync(Msg.Challenge, new ChallengeMsg(passwordOpen, config.PasswordSalt, config.Iterations, Convert.ToBase64String(nonce), trusted), preAuth.Token);
+            // 1.17.0: os dois lados precisam estar numa conta liberada. Sem isso, o desafio vai sem senha nem autorização
+            // (nada de pedir senha à toa) e a resposta recusa com o motivo, que um visualizador antigo também mostra.
+            string? ownTicket = Ticket.Valid(config) ? config.Ticket : null;
+            string ticketProblem = "";
+            string? viewerAccount = viewerKey is null ? null : Ticket.Verify(hello.Ticket, keyHash, out ticketProblem);
+            bool accounts = ownTicket is not null && viewerAccount is not null;
+            if (!accounts) trusted = false;
+            bool passwordOpen = accounts && config.HasPassword && DateTime.UtcNow >= _lockedUntil;
+            await channel.SendJsonAsync(Msg.Challenge, new ChallengeMsg(passwordOpen, config.PasswordSalt, config.Iterations, Convert.ToBase64String(nonce), trusted, ownTicket), preAuth.Token);
             // Daqui em diante o outro lado pode estar digitando a senha.
             preAuth.CancelAfter(TimeSpan.FromMinutes(2));
             var response = await channel.ExpectAsync<AuthResponseMsg>(Msg.AuthResponse, preAuth.Token);
@@ -817,7 +840,14 @@ internal sealed class HostService(AppConfig config, bool standalone = false) : I
 
             bool ok = false, paired = false;
             string reason, access = "";
-            if (trusted && signed && config.TouchTrusted(keyHash, name, user))
+            if (!accounts || !signed)
+            {
+                reason = ownTicket is null ? "O Ponte deste computador não está numa conta liberada. Alguém precisa abrir o Ponte nele e entrar na conta."
+                       : hello.Ticket is null ? "Este computador agora só aceita acesso de quem entrou numa conta liberada. Atualize o Ponte (1.17.0 ou mais nova) e entre na conta."
+                       : $"A conta de quem está acessando não vale aqui ({(signed ? ticketProblem : "aparelho sem prova da própria chave")}). Saia e entre de novo na conta.";
+                if (ownTicket is not null) SessionLog.Write($"controlado: recusado {name} ({remote}): {(hello.Ticket is null ? "sem conta (versão antiga)" : ticketProblem)}");
+            }
+            else if (trusted && signed && config.TouchTrusted(keyHash, name, user))
             {
                 ok = paired = true;
                 reason = "";
@@ -857,6 +887,7 @@ internal sealed class HostService(AppConfig config, bool standalone = false) : I
             if (ok && signed && !hello.Resume) config.ClearResumeBlock(keyHash);
             if (ok)
             {
+                access += " · conta " + viewerAccount;
                 session = new HostSession(channel, hello, remote, ReceiveDir, config.ShareSound, config) { Access = access, ViewerKeyHash = signed ? keyHash : "" };
                 if (Interlocked.CompareExchange(ref _current, session, null) is not null)
                 {
@@ -867,7 +898,7 @@ internal sealed class HostService(AppConfig config, bool standalone = false) : I
             }
 
             var screens = Screen.AllScreens.Select((s, i) => new ScreenInfo(i, s.Bounds.Width, s.Bounds.Height, s.Primary, s.Bounds.X, s.Bounds.Y)).ToArray();
-            int caps = Caps.Cursor | Caps.Video | Caps.Management | Caps.AllScreens | (config.ShareSound && !WindowsHost.Agent ? Caps.Audio : 0);
+            int caps = Caps.Cursor | Caps.Video | Caps.Management | Caps.AllScreens | Caps.SecureAttention | (config.ShareSound && !WindowsHost.Agent ? Caps.Audio : 0);
             await channel.SendJsonAsync(Msg.AuthResult, new AuthResultMsg(ok, reason, Environment.MachineName, screens, paired, Updater.Current.ToString(), caps), _cts.Token);
             if (session is null) return;
 

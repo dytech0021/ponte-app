@@ -40,6 +40,26 @@ class Recorder(override var acceptsText: Boolean = true) : RemoteInput {
 }
 
 object Apoio {
+    /**
+     * 1.17.0: o Ponte só funciona com uma conta liberada. As telas de teste entram numa conta de mentira, com bilhetes
+     * da chave de teste, e o servidor da conta aponta para um lugar que não responde.
+     */
+    fun contaLiberada(context: android.content.Context) {
+        TokenVault.plainForTests = true
+        Account.base = "http://127.0.0.1:1"
+        val store = Store(context)
+        store.storeAccount(Account.restore("teste@ponte.local", "usuario-teste", "renovar")!!)
+        val validade = System.currentTimeMillis() / 1000 + 13L * 24 * 3600
+        store.ticket = ponte.core.Ticket.signForTest("teste@ponte.local", ponte.core.HostCrypto.keyHash(DeviceIdentity.get().spki), validade)
+        store.hostTicket = ponte.core.Ticket.signForTest("teste@ponte.local", "00".repeat(32), validade)
+    }
+
+    fun semConta(context: android.content.Context) {
+        Store(context).signOutAccount()
+        Account.base = Account.URL_BASE
+        TokenVault.plainForTests = false
+    }
+
     /** Fora de um aparelho não há cofre de chaves; os testes usam uma chave em memória. */
     fun identidade(): Identity {
         val pair = KeyPairGenerator.getInstance("EC").apply { initialize(ECGenParameterSpec("secp256r1")) }.generateKeyPair()

@@ -36,9 +36,10 @@ import kotlin.test.assertTrue
 class HostTest {
     private fun ecPair() = KeyPairGenerator.getInstance("EC").apply { initialize(ECGenParameterSpec("secp256r1")) }.generateKeyPair()
 
-    private fun newHostKey(): HostKey {
+    /** A chave do "celular"; com [config], ele ganha também o bilhete da conta (1.17.0) preso a ela. */
+    private fun newHostKey(config: Config? = null): HostKey {
         val pair = ecPair()
-        return HostKey(pair.private, SelfSignedCertificate.create(pair))
+        return HostKey(pair.private, SelfSignedCertificate.create(pair)).also { config?.key = it }
     }
 
     @Test
@@ -158,6 +159,9 @@ class HostTest {
             return true
         }
         override fun touchTrusted(keyHash: String, name: String, user: String) = trusted.containsKey(keyHash)
+        var key: HostKey? = null
+        var account = true
+        override val ticket: String get() = key?.takeIf { account }?.let { Ticket.signForTest("celular@teste", HostCrypto.keyHash(it.spki)) } ?: ""
     }
 
     private class FakePhone(var answer: Permission = Permission.ONCE) : HostPlatform {
@@ -205,8 +209,9 @@ class HostTest {
         override fun confirmNewIdentity() = false
     }
 
-    private val viewerConfig = ClientConfig("", "", "PC do teste", "Teste", "1.14.0")
     private val viewerIdentity: Identity = ecPair().let { EcIdentity(it.private, it.public) }
+    private val viewerTicket = Ticket.signForTest("pc@teste", HostCrypto.keyHash(viewerIdentity.spki))
+    private val viewerConfig = ClientConfig("", "", "PC do teste", "Teste", "1.14.0", viewerTicket)
 
     /** Um lugar onde o "celular" atende uma conexão direta, como faria pelo servidor. */
     private fun listen(host: PonteHost): ServerSocket {
@@ -224,7 +229,7 @@ class HostTest {
     fun entraComSenhaVeATelaEControla() {
         val config = Config(password = "s3nha çá")
         val phone = FakePhone()
-        val host = PonteHost(config, newHostKey(), phone)
+        val host = PonteHost(config, newHostKey(config), phone)
         listen(host).use { server ->
             assertFailsWith<PonteException> {
                 PonteClient.connect(viewerConfig, "127.0.0.1:${server.localPort}", viewerIdentity, null, false, answers("errada"))
@@ -265,7 +270,7 @@ class HostTest {
     fun pedidoNaTelaESempreAutorizado() {
         val config = Config()
         val phone = FakePhone(answer = Permission.ALWAYS)
-        val host = PonteHost(config, newHostKey(), phone)
+        val host = PonteHost(config, newHostKey(config), phone)
         listen(host).use { server ->
             val first = PonteClient.connect(viewerConfig, "127.0.0.1:${server.localPort}", viewerIdentity, null, false, answers(""))
             val request = phone.asked.poll(1, TimeUnit.SECONDS)!!
@@ -286,7 +291,7 @@ class HostTest {
             // Outro aparelho, recusado.
             val other = ecPair().let { EcIdentity(it.private, it.public) }
             assertFailsWith<PonteException> {
-                PonteClient.connect(viewerConfig, "127.0.0.1:${server.localPort}", other, null, false, answers(""))
+                PonteClient.connect(ClientConfig("", "", "Outro PC", "Teste", "1.17.0", Ticket.signForTest("outro@teste", HostCrypto.keyHash(other.spki))), "127.0.0.1:${server.localPort}", other, null, false, answers(""))
             }.also { assertEquals("O pedido foi recusado.", it.message) }
         }
     }
@@ -295,7 +300,7 @@ class HostTest {
     fun encerraPorFaltaDeUso() {
         val config = Config(password = "x")
         val phone = FakePhone()
-        val host = PonteHost(config, newHostKey(), phone)
+        val host = PonteHost(config, newHostKey(config), phone)
         listen(host).use { server ->
             val session = PonteClient.connect(viewerConfig, "127.0.0.1:${server.localPort}", viewerIdentity, null, false, answers("x"))
             val viewer = Viewer()
@@ -390,13 +395,13 @@ class HostTest {
         FakeRelay().use { relay ->
             val config = Config(relayServer = "127.0.0.1:${relay.port}", password = "abc")
             val phone = FakePhone()
-            val key = newHostKey()
+            val key = newHostKey(config)
             val host = PonteHost(config, key, phone)
             host.start()
             try {
                 assertTrue(relay.registered.await(5, TimeUnit.SECONDS))
                 assertEquals(key.id, relay.registeredId)
-                val client = ClientConfig("127.0.0.1:${relay.port}", "", "PC do teste", "Teste", "1.14.0")
+                val client = ClientConfig("127.0.0.1:${relay.port}", "", "PC do teste", "Teste", "1.14.0", viewerTicket)
                 val session = PonteClient.connect(client, key.id, viewerIdentity, null, false, answers("abc"))
                 assertEquals("Celular de teste", session.hostName)
                 val viewer = Viewer()
@@ -409,13 +414,61 @@ class HostTest {
         }
     }
 
+    // ---------- conta obrigatória (1.17.0) ----------
+
+    @Test
+    fun semContaLiberadaNaoHaSessao() {
+        val config = Config(password = "abc")
+        val phone = FakePhone()
+        val host = PonteHost(config, newHostKey(config), phone)
+        listen(host).use { server ->
+            val target = "127.0.0.1:${server.localPort}"
+            // Quem acessa sem bilhete nem chega a tentar.
+            val noTicket = ClientConfig("", "", "PC do teste", "Teste", "1.17.0")
+            assertFailsWith<PonteException> { PonteClient.connect(noTicket, target, viewerIdentity, null, false, answers("abc")) }
+                .also { assertTrue(it.message!!.contains("conta liberada"), it.message) }
+            // Bilhete de outro aparelho não vale.
+            val other = ecPair().let { EcIdentity(it.private, it.public) }
+            assertFailsWith<PonteException> { PonteClient.connect(viewerConfig, target, other, null, false, answers("abc")) }
+            // O celular sem conta recusa, e quem acessa também não aceita um celular sem conta.
+            config.account = false
+            assertFailsWith<PonteException> { PonteClient.connect(viewerConfig, target, viewerIdentity, null, false, answers("abc")) }
+                .also { assertTrue(it.message!!.contains("conta liberada"), it.message) }
+            assertTrue(phone.asked.isEmpty(), "sem conta, ninguém é perguntado na tela")
+            config.account = true
+            val session = PonteClient.connect(viewerConfig, target, viewerIdentity, null, false, answers("abc"))
+            assertEquals("celular@teste", session.hostAccount)
+            assertFalse(session.hasSecureAttention, "celular não tem Ctrl+Alt+Del")
+            session.close()
+        }
+    }
+
+    @Test
+    fun bilheteSoValeAssinadoNoAparelhoDeleEDentroDaValidade() {
+        val hash = HostCrypto.keyHash(viewerIdentity.spki)
+        assertEquals("pc@teste", Ticket.verify(viewerTicket, hash).email)
+        assertNull(Ticket.verify(viewerTicket, "00".repeat(32)).email)
+        assertNull(Ticket.verify(Ticket.signForTest("a@b.c", hash, System.currentTimeMillis() / 1000 - 60), hash).email)
+        val dot = viewerTicket.indexOf('.')
+        val forged = Ticket.encode(Json.write(mapOf("v" to 1, "e" to "intruso@x.y", "k" to hash, "x" to 4102444800L)).toByteArray()) + viewerTicket.substring(dot)
+        assertNull(Ticket.verify(forged, hash).email)
+        val stranger = ecPair()
+        val payload = Ticket.decode(viewerTicket.substring(0, dot))
+        assertNull(Ticket.verify(viewerTicket.substring(0, dot) + "." + Ticket.encode(HostCrypto.sign(stranger.private, payload)), hash).email)
+        assertNull(Ticket.verify("", hash).email)
+        assertNull(Ticket.verify("lixo", hash).email)
+        assertNull(Ticket.verify("a.b", hash).email)
+        assertTrue(Ticket.valid(viewerTicket, hash, 3600))
+        assertFalse(Ticket.valid(viewerTicket, hash, Ticket.RENEW_BEFORE_SECONDS), "bilhete de um dia já pede renovação")
+    }
+
     // ---------- Ponte no navegador (o mesmo canal de WebChannel.cs, com o lado do navegador escrito aqui) ----------
 
     @Test
     fun navegadorConectaPeloCanalProprio() {
         val config = Config(password = "web")
         val phone = FakePhone()
-        val key = newHostKey()
+        val key = newHostKey(config)
         val host = PonteHost(config, key, phone)
         listen(host).use { server ->
             Socket("127.0.0.1", server.localPort).use { socket ->
@@ -470,7 +523,11 @@ class HostTest {
                     return (plain[0].toInt() and 0xFF) to plain.copyOfRange(5, plain.size)
                 }
 
-                send(Msg.HELLO, Json.write(mapOf("Name" to "Navegador", "User" to "Web", "Version" to "1.14.0")).toByteArray())
+                // 1.17.0: o navegador também manda a chave dele e o bilhete da conta, e prova ser dono da chave.
+                val browserKey = ecPair()
+                val browserTicket = Ticket.signForTest("navegador@teste", HostCrypto.keyHash(browserKey.public.encoded))
+                send(Msg.HELLO, Json.write(mapOf("Name" to "Navegador", "User" to "Web", "Version" to "1.17.0",
+                    "Key" to Base64.getEncoder().encodeToString(browserKey.public.encoded), "Ticket" to browserTicket)).toByteArray())
                 val (type, body) = receive()
                 assertEquals(Msg.CHALLENGE, type)
                 val challenge = Json.parseObject(String(body))
@@ -478,7 +535,10 @@ class HostTest {
                 val nonceBytes = Base64.getDecoder().decode(challenge.str("Nonce"))
                 val verifier = Crypto.pbkdf2("web", Base64.getDecoder().decode(challenge.str("Salt")), challenge.int("Iterations"))
                 val proof = Crypto.proof(verifier, nonceBytes, Crypto.sha256(cert))
-                send(Msg.AUTH_RESPONSE, Json.write(mapOf("Proof" to Base64.getEncoder().encodeToString(proof))).toByteArray())
+                val pairing = HostCrypto.sign(browserKey.private, Crypto.pairingMessage(nonceBytes, Crypto.sha256(cert)))
+                assertNotNull(Ticket.verify(challenge["Ticket"] as? String, HostCrypto.keyHash(key.spki)).email, "o celular manda o bilhete dele")
+                send(Msg.AUTH_RESPONSE, Json.write(mapOf("Proof" to Base64.getEncoder().encodeToString(proof),
+                    "Signature" to Base64.getEncoder().encodeToString(pairing))).toByteArray())
                 val (resultType, resultBody) = receive()
                 assertEquals(Msg.AUTH_RESULT, resultType)
                 val result = Json.parseObject(String(resultBody))

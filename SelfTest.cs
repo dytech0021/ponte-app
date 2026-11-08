@@ -78,6 +78,11 @@ internal static partial class SelfTest
         viewerConfig.KnownHosts.Clear();
         viewerConfig.Saved.Clear();
 
+        // 1.17.0: conta obrigatória dos dois lados. As sessões de teste usam bilhetes de uma chave de teste.
+        Ticket.GiveTestTicket(hostConfig, "controlado@autoteste");
+        Ticket.GiveTestTicket(viewerConfig, "visualizador@autoteste");
+        CheckTickets(hostConfig, viewerConfig, check);
+
         using var host = new HostService(hostConfig) { ReceiveDir = received };
         host.Start(IPAddress.Loopback);
         string target = $"127.0.0.1:{hostConfig.ListenPort}";
@@ -143,6 +148,18 @@ internal static partial class SelfTest
             }
             catch (PonteException ex) { return ex.Message; }
         }
+
+        // 0. Conta: sem bilhete de um dos lados, não há sessão (e a senha nem chega a ser pedida).
+        string savedTicket = hostConfig.Ticket;
+        hostConfig.Ticket = "";
+        string noHostAccount = await Refused(password);
+        hostConfig.Ticket = savedTicket;
+        check("aparelho acessado sem conta liberada não é acessado", noHostAccount.Contains("conta liberada"), noHostAccount);
+        savedTicket = viewerConfig.Ticket;
+        viewerConfig.Ticket = "";
+        string noViewerAccount = await Refused(password);
+        viewerConfig.Ticket = savedTicket;
+        check("sem conta liberada não se acessa outro aparelho", noViewerAccount.Contains("conta liberada"), noViewerAccount);
 
         // 1. Autenticação
         string reason = await Refused("senha-errada");
@@ -237,6 +254,24 @@ internal static partial class SelfTest
             thumbnailOk = small.Width == 320 && small.Height == 180;
         }
         check("miniatura da tela é gravada", thumbnailOk);
+
+        // Ctrl+Alt+Del (1.17.0): o pedido chega ao controlado, que chama o serviço (aqui simulado, para não abrir a
+        // tela segura de verdade); quando não dá, o motivo volta como aviso para quem acessa.
+        string? sasAnswer = "teste: o serviço simulado recusou o Ctrl+Alt+Del";
+        int sasCalls = 0;
+        WindowsHost.SecureAttentionOverride = () => { Interlocked.Increment(ref sasCalls); return sasAnswer; };
+        var sasNotice = new TaskCompletionSource<string>(TaskCreationOptions.RunContinuationsAsynchronously);
+        Action<string> onSasNotice = text => sasNotice.TrySetResult(text);
+        session.Notice += onSasNotice;
+        await session.SendSecureAttentionAsync();
+        bool sasTold = await Task.WhenAny(sasNotice.Task, Task.Delay(5000)) == sasNotice.Task && sasNotice.Task.Result == sasAnswer;
+        sasAnswer = null;
+        await session.SendSecureAttentionAsync();
+        await WaitAsync(() => Volatile.Read(ref sasCalls) == 2, 30);
+        session.Notice -= onSasNotice;
+        WindowsHost.SecureAttentionOverride = null;
+        check("Ctrl+Alt+Del chega ao controlado e o motivo de não dar volta como aviso", session.HostHasSecureAttention && sasTold && sasCalls == 2,
+            $"oferecido={session.HostHasSecureAttention}, aviso={sasTold}, pedidos={sasCalls}");
 
         // 3. Mouse: move o cursor de verdade, confere e devolve ao lugar.
         var notice = new TaskCompletionSource<string>(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -385,8 +420,11 @@ internal static partial class SelfTest
         var strangerConfig = AppConfig.Load(Path.Combine(dir, "perfil-estranho"));
         strangerConfig.RelayServer = relay ?? "";
         strangerConfig.KnownHosts.Clear();
+        Ticket.GiveTestTicket(strangerConfig, "estranho@autoteste");
 
-        check("visualizador de versão anterior ainda entra com a senha", await LegacyViewerEntersAsync(strangerConfig, target, password, ct));
+        // 1.17.0: um Ponte anterior não manda bilhete da conta e é recusado mesmo com a senha certa, com o aviso de atualizar.
+        string legacy = await LegacyViewerRefusedAsync(strangerConfig, target, password, ct);
+        check("visualizador de versão anterior (sem conta) é recusado mesmo com a senha", legacy.Contains("Atualize"), legacy);
         await WaitAsync(() => host.Current is null);
 
         // typed nulo desiste se a senha for pedida, então só entra quem a autorização deixar passar.
@@ -647,7 +685,7 @@ internal static partial class SelfTest
     }
 
     // Até a 1.1 o visualizador não mandava chave nem assinatura: tem de continuar entrando pela senha, sem ficar autorizado.
-    private static async Task<bool> LegacyViewerEntersAsync(AppConfig config, string target, string password, CancellationToken ct)
+    private static async Task<string> LegacyViewerRefusedAsync(AppConfig config, string target, string password, CancellationToken ct)
     {
         var (ssl, remote) = await Transport.ConnectAsync(config, target, ct);
         await using var channel = new Channel(ssl);
@@ -657,16 +695,17 @@ internal static partial class SelfTest
         string proof = Convert.ToBase64String(Security.Proof(verifier, Convert.FromBase64String(challenge.Nonce), Security.CertificateHash(remote)));
         await channel.SendAsync(Msg.AuthResponse, Encoding.UTF8.GetBytes($$"""{"Proof":"{{proof}}"}"""), ct);
         var result = await channel.ExpectAsync<AuthResultMsg>(Msg.AuthResult, ct);
-        return result is { Ok: true, Paired: false };
+        return result.Ok ? "entrou" : result.Reason;
     }
 
-    // Apresenta a chave pública de um computador autorizado, mas assina com outra: tem de ser tratado como desconhecido.
+    // Apresenta a chave pública e o bilhete da conta de um computador autorizado (os dois passam pela rede), mas assina
+    // com outra chave: tem de ser recusado. Copiar o bilhete de alguém não adianta sem a chave privada dele.
     private static async Task<bool> ForgedKeyRefusedAsync(AppConfig attacker, AppConfig victim, string target, CancellationToken ct)
     {
         var (ssl, remote) = await Transport.ConnectAsync(attacker, target, ct);
         await using var channel = new Channel(ssl);
         string victimKey = Convert.ToBase64String(victim.Certificate.PublicKey.ExportSubjectPublicKeyInfo());
-        await channel.SendJsonAsync(Msg.Hello, new HelloMsg("falso", "falso", "1.0", victimKey), ct);
+        await channel.SendJsonAsync(Msg.Hello, new HelloMsg("falso", "falso", "1.17.0", victimKey, Ticket: victim.Ticket), ct);
         var challenge = await channel.ExpectAsync<ChallengeMsg>(Msg.Challenge, ct);
         string signature = Security.SignPairing(attacker.Certificate, Convert.FromBase64String(challenge.Nonce), Security.CertificateHash(remote));
         await channel.SendJsonAsync(Msg.AuthResponse, new AuthResponseMsg(null, signature, true), ct);
@@ -758,6 +797,27 @@ internal static partial class SelfTest
         await session.SendSettingsAsync(shown, 60);
         bool back = await WaitAsync(() => { lock (session.CanvasLock) return session.Canvas is { } c && c.Width == primary.Width && c.Height == primary.Height; });
         check("volta a mandar uma tela só", back, "", false);
+    }
+
+    // Bilhete da conta: a assinatura, o aparelho a que ele está preso e a validade.
+    private static void CheckTickets(AppConfig hostConfig, AppConfig viewerConfig, Checker check)
+    {
+        string hostHash = Ticket.KeyHashOf(hostConfig), viewerHash = Ticket.KeyHashOf(viewerConfig);
+        var problems = new List<string>();
+        if (Ticket.Verify(viewerConfig.Ticket, viewerHash, out string why) != "visualizador@autoteste") problems.Add("bilhete bom recusado: " + why);
+        if (Ticket.Verify(viewerConfig.Ticket, hostHash, out _) is not null) problems.Add("bilhete aceito em outro aparelho");
+        if (Ticket.Verify(Ticket.SignForTest("a@b.c", viewerHash, DateTime.UtcNow.AddMinutes(-1)), viewerHash, out _) is not null) problems.Add("bilhete vencido aceito");
+        string good = viewerConfig.Ticket;
+        string forged = Ticket.ToBase64Url(System.Text.Encoding.UTF8.GetBytes($"{{\"v\":1,\"e\":\"intruso@x.y\",\"k\":\"{viewerHash}\",\"x\":4102444800}}")) + good[good.IndexOf('.')..];
+        if (Ticket.Verify(forged, viewerHash, out _) is not null) problems.Add("bilhete alterado aceito");
+        using (var stranger = ECDsa.Create(ECCurve.NamedCurves.nistP256))
+        {
+            byte[] payload = Ticket.FromBase64Url(good[..good.IndexOf('.')]);
+            string otherSigner = good[..good.IndexOf('.')] + "." + Ticket.ToBase64Url(stranger.SignData(payload, HashAlgorithmName.SHA256));
+            if (Ticket.Verify(otherSigner, viewerHash, out _) is not null) problems.Add("bilhete de outra chave aceito");
+        }
+        if (Ticket.Verify("", viewerHash, out _) is not null || Ticket.Verify("lixo", viewerHash, out _) is not null) problems.Add("bilhete vazio ou estragado aceito");
+        check("bilhete da conta só vale assinado, no aparelho dele e dentro da validade", problems.Count == 0, string.Join("; ", problems));
     }
 
     private static async Task<bool> WaitAsync(Func<bool> condition, int tenths = 50)

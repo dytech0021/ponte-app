@@ -202,19 +202,27 @@ class ContaTest {
         assertTrue(error.message!!.startsWith("A conta saiu"))
     }
 
-    @Test fun entrarNaContaEOpcionalEFicaNaTelaInicial() {
+    @Test fun semContaOPontePedeOLoginAoAbrir() {
         UpdateFlow.automatic = false
         DeviceIdentity.replacement = Apoio.identidade()
+        MainActivity.askedLogin = false
         try {
             val controller = Robolectric.buildActivity(MainActivity::class.java).setup()
             val activity = controller.get()
             val link = activity.findViewById<TextView>(R.id.conta)
-            assertEquals("Entrar na conta", link.text.toString())
-            link.performClick()
+            assertEquals("Entrar na conta (obrigatório)", link.text.toString())
+            // Ao abrir sem conta, a janela de login aparece sozinha (uma vez por abertura).
+            Apoio.avanca(100)
             val dialog = ShadowAlertDialog.getLatestAlertDialog()
             assertTrue(dialog.isShowing)
-            assertEquals("Entrar com a conta do FilaBox", shadowOf(dialog).title.toString())
+            assertEquals("Entre na sua conta para usar o Ponte", shadowOf(dialog).title.toString())
             dialog.dismiss()
+            // Sem conta, conectar não abre a sessão: pede o login de novo.
+            activity.findViewById<android.widget.EditText>(R.id.endereco).setText("123456789")
+            activity.findViewById<android.view.View>(R.id.conectar).performClick()
+            assertEquals(null, shadowOf(activity).nextStartedActivity)
+            assertTrue(ShadowAlertDialog.getLatestAlertDialog().isShowing)
+            ShadowAlertDialog.getLatestAlertDialog().dismiss()
             controller.pause().stop().destroy()
         } finally { DeviceIdentity.replacement = null }
     }

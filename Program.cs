@@ -147,7 +147,7 @@ internal static class Program
                     ("autorizados.png", new TrustedDialog(config)),
                     ("configuracoes.png", new SettingsDialog(config, false)),
                     ("celular.png", new AndroidAppDialog(config)),
-                    ("conta.png", new AccountDialog()),
+                    ("conta.png", new AccountDialog(config, required: true)),
                     ("video.png", new VideoSettingsDialog(new VideoOptions(60, "h264"), "H.264 pela GPU (AMD) · 60 FPS alvo · 4:2:0 · captura DXGI")),
                     ("sessao-ativa.png", new SessionIndicator(new HostSession(new Channel(Stream.Null),
                         new HelloMsg("NOTEBOOK-CASA", "maria", Updater.Current.ToString(), null, Caps.Files), "pelo servidor de retransmissão", "", true, config)) { WindowState = FormWindowState.Normal }),

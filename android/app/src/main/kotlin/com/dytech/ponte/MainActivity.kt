@@ -25,6 +25,8 @@ import android.widget.Spinner
 import android.widget.TextView
 import android.widget.Toast
 import ponte.core.Crypto
+import ponte.core.NotReleasedException
+import ponte.core.PonteException
 import ponte.core.Presence
 import ponte.core.Target
 import java.text.SimpleDateFormat
@@ -55,7 +57,6 @@ class MainActivity : Activity() {
 
         findViewById<View>(R.id.conectar).setOnClickListener { connect(address.text.toString()) }
         findViewById<View>(R.id.salvar).setOnClickListener { editComputer(address.text.toString().trim(), "", true, isNew = true) }
-        findViewById<View>(R.id.exilados).setOnClickListener { abrirExilados() }
         findViewById<View>(R.id.acesso).setOnClickListener { startActivity(Intent(this, AcessoActivity::class.java)) }
         findViewById<View>(R.id.menu).setOnClickListener { showMenu(it) }
         findViewById<View>(R.id.conta).setOnClickListener { accountClicked() }
@@ -86,6 +87,15 @@ class MainActivity : Activity() {
         showAccount()
         // Ao voltar para a tela, a lista é conferida com a conta (no máximo uma vez por minuto).
         if (System.currentTimeMillis() - Store.lastAccountSync > 60_000) syncAccount()
+        // Sem conta, o Ponte já pede o login ao abrir (uma vez por abertura); com conta, o bilhete é renovado.
+        if (store.account() == null) {
+            if (!askedLogin) {
+                askedLogin = true
+                presence.post { if (!isFinishing && store.account() == null) showSignIn(required = true) }
+            }
+        } else {
+            renewTicket()
+        }
         presence.removeCallbacks(checkPresence)
         presence.post(checkPresence)
     }
@@ -119,8 +129,16 @@ class MainActivity : Activity() {
         // Link (ou código) de uma live antiga do Ponte: as lives agora ficam no Exilados.
         if (target.contains("/ponte/assistir", ignoreCase = true) || LIVE_ANTIGA.matches(target)) {
             Toast.makeText(this, "As lives saíram do Ponte e agora ficam no Exilados.", Toast.LENGTH_LONG).show()
-            abrirExilados()
             return
+        }
+        // 1.17.0: sem conta liberada não se acessa nada.
+        if (store.account() == null) {
+            Toast.makeText(this, "Entre numa conta liberada para acessar outro aparelho.", Toast.LENGTH_LONG).show()
+            return showSignIn(required = true)
+        }
+        if (!BilheteConta.ok(store)) {
+            Toast.makeText(this, "A conta ainda não está liberada para usar o Ponte. Conferindo de novo...", Toast.LENGTH_LONG).show()
+            return renewTicket(force = true)
         }
         startActivity(Intent(this, SessionActivity::class.java).putExtra(SessionActivity.EXTRA_TARGET, target))
     }
@@ -204,18 +222,13 @@ class MainActivity : Activity() {
         return row
     }
 
-    /** As lives e os amigos saíram do Ponte e agora ficam no Exilados, no navegador. */
-    private fun abrirExilados() {
-        try {
-            startActivity(Intent(Intent.ACTION_VIEW, android.net.Uri.parse("https://filabox3d.com.br/exilados/")))
-        } catch (e: android.content.ActivityNotFoundException) {
-            Toast.makeText(this, "Abra filabox3d.com.br/exilados no navegador.", Toast.LENGTH_LONG).show()
-        }
-    }
-
     // ---------- online / offline ----------
 
     companion object {
+        /** O login já foi pedido nesta abertura do aplicativo (não insiste a cada volta para a tela). */
+        internal var askedLogin = false
+        private var lastTicketTry = 0L
+
         /** Código de uma live antiga do Ponte (24 letras e números): as lives agora ficam no Exilados. */
         private val LIVE_ANTIGA = Regex("^(?=.*[A-Za-z])[A-Za-z0-9]{24}$")
 
@@ -349,29 +362,68 @@ class MainActivity : Activity() {
             .show()
     }
 
-    // ---------- conta (opcional) ----------
+    // ---------- conta (obrigatória desde a 1.17.0) ----------
 
     private var googleLogin: Account.GoogleLogin? = null
     @Volatile private var syncing = false
+    private var accountColors: android.content.res.ColorStateList? = null
 
     private fun showAccount() {
         val account = store.account()
-        findViewById<TextView>(R.id.conta).text = if (account == null) "Entrar na conta" else "Conta: ${account.email}"
+        val ok = account != null && BilheteConta.ok(store)
+        val view = findViewById<TextView>(R.id.conta)
+        if (accountColors == null) accountColors = view.textColors
+        view.text = when {
+            account == null -> "Entrar na conta (obrigatório)"
+            ok -> "Conta: ${account.email}"
+            else -> "Conta: ${account.email} (não liberada)"
+        }
+        if (ok) accountColors?.let { view.setTextColor(it) } else view.setTextColor(getColor(R.color.perigo))
     }
 
     private fun accountClicked() {
-        val account = store.account() ?: return showSignIn()
+        val account = store.account() ?: return showSignIn(required = true)
+        val actions = mutableListOf<Pair<String, () -> Unit>>()
+        if (!BilheteConta.ok(store)) actions += "Conferir a conta de novo" to { renewTicket(force = true) }
+        actions += "Sincronizar a lista agora" to { syncAccount(manual = true) }
+        actions += "Criar ou gerenciar a conta no FilaBox" to { openSite("/login") }
+        actions += "Sair da conta neste aparelho" to { signOut() }
         AlertDialog.Builder(this)
             .setTitle("Conta: ${account.email}")
-            .setItems(arrayOf("Sincronizar a lista agora", "Criar ou gerenciar a conta no FilaBox", "Sair da conta neste aparelho")) { _, which ->
-                when (which) {
-                    0 -> syncAccount(manual = true)
-                    1 -> openSite("/login")
-                    2 -> signOut()
-                }
-            }
+            .setItems(actions.map { it.first }.toTypedArray()) { _, which -> actions[which].second() }
             .setNegativeButton("Fechar", null)
             .show()
+    }
+
+    /** Renova os bilhetes da conta quando falta menos de uma semana (ou na marra). Sem internet, os atuais valem até vencer. */
+    private fun renewTicket(force: Boolean = false) {
+        val account = store.account() ?: return
+        if (!force && !BilheteConta.needsRenewal(store)) return
+        if (!force && System.currentTimeMillis() - lastTicketTry < 10 * 60_000) return
+        lastTicketTry = System.currentTimeMillis()
+        thread(name = "ponte-bilhete") {
+            val problem = try {
+                BilheteConta.renew(this, store, account)
+                null
+            } catch (e: NotReleasedException) {
+                store.ticket = ""
+                store.hostTicket = ""
+                e.message
+            } catch (e: PonteException) {
+                e.message ?: "Não foi possível conferir a conta."
+            } catch (e: AccountException) {
+                e.message ?: "Não foi possível conferir a conta."
+            }
+            runOnUiThread {
+                if (isDestroyed) return@runOnUiThread
+                showAccount()
+                when {
+                    problem == null -> if (force) Toast.makeText(this, "Conta liberada: o Ponte está pronto para acessar e ser acessado.", Toast.LENGTH_LONG).show()
+                    problem.startsWith("A conta saiu") -> signOut(problem)
+                    force || !BilheteConta.ok(store) -> Toast.makeText(this, "Conta: $problem", Toast.LENGTH_LONG).show()
+                }
+            }
+        }
     }
 
     private fun openSite(path: String) {
@@ -390,17 +442,20 @@ class MainActivity : Activity() {
         setOnClickListener { openSite(path) }
     }
 
-    /** Entrar com a conta do FilaBox: e-mail e senha, ou Google pelo navegador. Entrar é opcional. */
-    private fun showSignIn() {
+    /**
+     * Entrar com a conta do FilaBox: e-mail e senha, ou Google pelo navegador. Desde a 1.17.0 é obrigatório, e só fica
+     * no aparelho uma conta liberada pelo dono do Ponte (o bilhete dela é pedido logo ao entrar).
+     */
+    private fun showSignIn(required: Boolean = false) {
         val email = field("E-mail", "", InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_EMAIL_ADDRESS)
         val password = field("Senha", "", InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_PASSWORD)
         val status = note("")
         val dialog = AlertDialog.Builder(this)
-            .setTitle("Entrar com a conta do FilaBox")
+            .setTitle(if (required) "Entre na sua conta para usar o Ponte" else "Entrar com a conta do FilaBox")
             .setView(
                 form(
-                    note("Os computadores que você salvar ficam na conta e aparecem em qualquer aparelho em que você entrar. " +
-                        "Cada conta vê só os próprios. Entrar é opcional."),
+                    note("O Ponte só funciona com uma conta liberada pelo dono do Ponte, dos dois lados: em quem acessa e no aparelho " +
+                        "acessado. A conta é a mesma do FilaBox, e os computadores salvos ficam nela."),
                     email, password,
                     link("Criar conta no FilaBox", "/login"),
                     link("Esqueci a senha", "/recuperar-senha"),
@@ -409,14 +464,28 @@ class MainActivity : Activity() {
             )
             .setPositiveButton("Entrar", null)
             .setNeutralButton("Google", null)
-            .setNegativeButton("Cancelar", null)
+            .setNegativeButton(if (required) "Agora não" else "Cancelar", null)
             .create()
         fun busy(text: String, failed: Boolean = false) {
             status.text = text
             status.setTextColor(getColor(if (failed) R.color.perigo else R.color.texto_secundario))
         }
         fun attempt(signIn: () -> Account) = thread(name = "ponte-conta") {
-            val outcome = try { Result.success(signIn()) } catch (e: AccountException) { Result.failure(e) }
+            val outcome = try {
+                val account = signIn()
+                runOnUiThread { busy("Conferindo se a conta está liberada para usar o Ponte...") }
+                try {
+                    BilheteConta.renew(this, store, account)
+                } catch (e: Exception) {
+                    if (e !is NotReleasedException && e !is PonteException && e !is AccountException) throw e
+                    // Conta fora da lista (ou sem como conferir agora): não fica gravada neste aparelho.
+                    account.signOut()
+                    throw AccountException(e.message ?: "Não foi possível conferir a conta.")
+                }
+                Result.success(account)
+            } catch (e: AccountException) {
+                Result.failure(e)
+            }
             runOnUiThread {
                 if (isDestroyed) return@runOnUiThread
                 dialog.getButton(AlertDialog.BUTTON_POSITIVE)?.isEnabled = true
@@ -425,7 +494,7 @@ class MainActivity : Activity() {
                     store.storeAccount(it)
                     dialog.dismiss()
                     showAccount()
-                    Toast.makeText(this, "Você entrou como ${it.email}", Toast.LENGTH_SHORT).show()
+                    Toast.makeText(this, "Você entrou como ${it.email}. O Ponte está pronto para acessar e ser acessado.", Toast.LENGTH_LONG).show()
                     syncAccount(manual = true)
                 }.onFailure { busy(it.message ?: "Não foi possível entrar.", failed = true) }
             }
@@ -497,7 +566,7 @@ class MainActivity : Activity() {
         thread(name = "ponte-sair") { account.signOut() }
         showAccount()
         refresh()
-        Toast.makeText(this, reason ?: "Você saiu da conta neste aparelho. Os computadores dela não aparecem mais aqui.", Toast.LENGTH_LONG).show()
+        Toast.makeText(this, reason ?: "Você saiu da conta neste aparelho. Sem conta, o Ponte não acessa nem é acessado.", Toast.LENGTH_LONG).show()
     }
 
     // ---------- menu ----------
@@ -571,8 +640,7 @@ class MainActivity : Activity() {
                 "Versão ${BuildConfig.VERSION_NAME}\n\n" +
                     "Endereço deste aparelho: $id\n" +
                     "É com esse número e o nome \"${store.deviceName}\" que ele aparece na lista de computadores autorizados do Ponte no computador.\n\n" +
-                    "Este aplicativo acessa computadores que tenham o Ponte aberto. Ele não permite que o celular seja acessado.\n\n" +
-                    "As lives e os amigos ficam no Exilados: filabox3d.com.br/exilados"
+                    "Este aplicativo acessa computadores que tenham o Ponte aberto. Ele não permite que o celular seja acessado."
             )
             .setPositiveButton("Fechar", null)
             .show()

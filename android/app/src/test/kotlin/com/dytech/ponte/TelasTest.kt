@@ -39,11 +39,13 @@ class TelasTest {
     @Before
     fun prepara() {
         DeviceIdentity.replacement = Apoio.identidade()
+        Apoio.contaLiberada(context)
         UpdateFlow.automatic = false
     }
 
     @After
     fun desfaz() {
+        Apoio.semConta(context)
         DeviceIdentity.replacement = null
     }
 
