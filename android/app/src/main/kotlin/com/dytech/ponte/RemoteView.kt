@@ -379,10 +379,15 @@ class RemoteView @JvmOverloads constructor(context: Context, attrs: AttributeSet
         invalidate()
     }
 
+    /** Quando o dedo tocou a tela do computador pela última vez (uptimeMillis): o teclado só abre sozinho logo depois de um toque. */
+    var lastTouch = 0L
+        private set
+
     override fun onTouchEvent(event: MotionEvent): Boolean {
         if (image == null || scale <= 0f) return true
         when (event.actionMasked) {
             MotionEvent.ACTION_DOWN -> {
+                lastTouch = android.os.SystemClock.uptimeMillis()
                 downX = event.x
                 downY = event.y
                 lastX = event.x

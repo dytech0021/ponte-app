@@ -27,6 +27,8 @@ internal sealed class HostSession(Channel channel, HelloMsg hello, string remote
     private int _quality = 60;
     private int _forceFull = 1, _forcePointer = 1;
     private readonly bool _sendVideo = (hello.Caps.GetValueOrDefault() & Caps.Video) != 0;
+    // 1.17.1: o celular de quem acessa abre o teclado quando o foco entra num campo de texto daqui.
+    private readonly bool _sendTextFocus = (hello.Caps.GetValueOrDefault() & Caps.TextFocus) != 0;
     private readonly object _videoGate = new();
     private VideoOptions _video = new();
     private CancellationTokenSource? _activeVideo;
@@ -139,6 +141,7 @@ internal sealed class HostSession(Channel channel, HelloMsg hello, string remote
         var pointer = Task.Run(() => PointerLoopAsync(ct), CancellationToken.None);
         var sound = Task.Run(() => SoundLoopAsync(ct), CancellationToken.None);
         var idle = Task.Run(() => IdleLoopAsync(ct), CancellationToken.None);
+        var textFocus = TextFocusLoopAsync(ct);
         try
         {
             await ReadLoopAsync(ct);
@@ -166,7 +169,7 @@ internal sealed class HostSession(Channel channel, HelloMsg hello, string remote
             }
             _stop.Cancel();
             SetSound(false);
-            foreach (var task in new[] { capture, sound, pointer, idle })
+            foreach (var task in new[] { capture, sound, pointer, idle, textFocus })
             {
                 try { await task; }
                 catch (Exception ex) when (ex is OperationCanceledException or IOException or ObjectDisposedException) { }
@@ -416,6 +419,37 @@ internal sealed class HostSession(Channel channel, HelloMsg hello, string remote
                 await channel.SendAsync(Msg.CursorPos, position, ct);
             await Task.Delay(20, ct);
         }
+    }
+
+    // Olha o foco do teclado a cada 300 ms numa linha própria (a Automação do Windows pode demorar com um programa
+    // travado) e avisa só quando muda.
+    private Task TextFocusLoopAsync(CancellationToken ct)
+    {
+        if (!_sendTextFocus) return Task.CompletedTask;
+        var done = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var thread = new Thread(() =>
+        {
+            try
+            {
+                bool? last = null;
+                while (!ct.IsCancellationRequested)
+                {
+                    bool now = TextFocus.Focused();
+                    if (now != last)
+                    {
+                        last = now;
+                        channel.SendAsync(Msg.TextFocus, new byte[] { (byte)(now ? 1 : 0) }, ct).GetAwaiter().GetResult();
+                    }
+                    ct.WaitHandle.WaitOne(300);
+                }
+            }
+            catch (Exception ex) when (ex is OperationCanceledException or IOException or ObjectDisposedException) { }
+            catch (Exception ex) { ErrorLog.Write(ex); }
+            finally { done.TrySetResult(); }
+        }) { IsBackground = true, Name = "ponte-campo-de-texto" };
+        thread.SetApartmentState(ApartmentState.MTA);
+        thread.Start();
+        return done.Task;
     }
 
     // Encerra a sessão depois do tempo sem uso, avisando antes: um minuto antes, ou na metade de um tempo mais curto.
@@ -898,7 +932,7 @@ internal sealed class HostService(AppConfig config, bool standalone = false) : I
             }
 
             var screens = Screen.AllScreens.Select((s, i) => new ScreenInfo(i, s.Bounds.Width, s.Bounds.Height, s.Primary, s.Bounds.X, s.Bounds.Y)).ToArray();
-            int caps = Caps.Cursor | Caps.Video | Caps.Management | Caps.AllScreens | Caps.SecureAttention | (config.ShareSound && !WindowsHost.Agent ? Caps.Audio : 0);
+            int caps = Caps.Cursor | Caps.Video | Caps.Management | Caps.AllScreens | Caps.SecureAttention | Caps.TextFocus | (config.ShareSound && !WindowsHost.Agent ? Caps.Audio : 0);
             await channel.SendJsonAsync(Msg.AuthResult, new AuthResultMsg(ok, reason, Environment.MachineName, screens, paired, Updater.Current.ToString(), caps), _cts.Token);
             if (session is null) return;
 

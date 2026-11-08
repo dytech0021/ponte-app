@@ -273,6 +273,11 @@ internal static partial class SelfTest
         check("Ctrl+Alt+Del chega ao controlado e o motivo de não dar volta como aviso", session.HostHasSecureAttention && sasTold && sasCalls == 2,
             $"oferecido={session.HostHasSecureAttention}, aviso={sasTold}, pedidos={sasCalls}");
 
+        // Campo de texto (1.17.1): com o foco numa caixa de texto o controlado diz que sim; num botão, que não.
+        var (onText, onButton) = ProbeTextFocus();
+        check("foco num campo de texto é percebido (para o celular abrir o teclado)", onText is null || (onText == true && onButton == false),
+            onText is null ? "a janela de teste não ficou em primeiro plano" : $"caixa de texto={onText}, botão={onButton}", skipped: onText is null);
+
         // 3. Mouse: move o cursor de verdade, confere e devolve ao lugar.
         var notice = new TaskCompletionSource<string>(TaskCreationOptions.RunContinuationsAsynchronously);
         session.Notice += text => notice.TrySetResult(text);
@@ -800,6 +805,51 @@ internal static partial class SelfTest
     }
 
     // Bilhete da conta: a assinatura, o aparelho a que ele está preso e a validade.
+    /// <summary>Abre uma janela com uma caixa de texto e um botão e pergunta a <see cref="TextFocus"/> com o foco em cada um.</summary>
+    private static (bool? text, bool? button) ProbeTextFocus()
+    {
+        bool? onText = null, onButton = null;
+        static bool AskMta()
+        {
+            bool answer = false;
+            var t = new Thread(() => answer = TextFocus.Focused()) { IsBackground = true };
+            t.SetApartmentState(ApartmentState.MTA);
+            t.Start();
+            t.Join(10000);
+            return answer;
+        }
+        var ui = new Thread(() =>
+        {
+            using var form = new Form { Text = "Ponte - teste do campo de texto", Width = 420, Height = 160, StartPosition = FormStartPosition.CenterScreen, TopMost = true };
+            var box = new TextBox { Left = 12, Top = 12, Width = 300 };
+            var button = new Button { Left = 12, Top = 52, Width = 100, Text = "OK" };
+            form.Controls.Add(box);
+            form.Controls.Add(button);
+            form.Shown += async (_, _) =>
+            {
+                try
+                {
+                    form.Activate();
+                    box.Focus();
+                    await Task.Delay(600);
+                    if (TextFocus.GetForegroundWindow() == form.Handle)
+                    {
+                        onText = await Task.Run(AskMta);
+                        button.Focus();
+                        await Task.Delay(400);
+                        onButton = await Task.Run(AskMta);
+                    }
+                }
+                finally { form.Close(); }
+            };
+            Application.Run(form);
+        }) { IsBackground = true };
+        ui.SetApartmentState(ApartmentState.STA);
+        ui.Start();
+        ui.Join(30000);
+        return (onText, onButton);
+    }
+
     private static void CheckTickets(AppConfig hostConfig, AppConfig viewerConfig, Checker check)
     {
         string hostHash = Ticket.KeyHashOf(hostConfig), viewerHash = Ticket.KeyHashOf(viewerConfig);

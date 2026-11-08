@@ -150,6 +150,10 @@ class TelasTest {
         val status = activity.findViewById<View>(R.id.estado)
         assertTrue("a imagem do computador não chegou", Apoio.espera(30000) { status.visibility == View.GONE })
         assertEquals(View.VISIBLE, activity.findViewById<View>(R.id.barraRolagem).visibility)
+        // A barra abre recolhida (1.17.1): só a seta, que a abre.
+        val recolhida = activity.findViewById<LinearLayout>(R.id.barra)
+        assertEquals(1, recolhida.childCount)
+        (recolhida.getChildAt(0) as TextView).performClick()
         assertTrue("a barra de comandos ficou vazia", activity.findViewById<LinearLayout>(R.id.barra).childCount >= 6)
 
         // O que a tela remota desenha não pode ser só o fundo: tem de haver imagem variada no meio.

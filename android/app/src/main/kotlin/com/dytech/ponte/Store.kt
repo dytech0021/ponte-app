@@ -79,6 +79,18 @@ class Store(context: Context) {
         get() = prefs.getBoolean("telaCheia", false)
         set(value) = prefs.edit().putBoolean("telaCheia", value).apply()
 
+    /**
+     * Onde fica a barra de comandos da sessão, de 0 (esquerda/alto) a 1 (direita/baixo) do espaço livre.
+     * O padrão é no alto, no meio.
+     */
+    var barX: Float
+        get() = prefs.getFloat("barraX", 0.5f)
+        set(value) = prefs.edit().putFloat("barraX", value).apply()
+
+    var barY: Float
+        get() = prefs.getFloat("barraY", 0f)
+        set(value) = prefs.edit().putFloat("barraY", value).apply()
+
     /** Ouvir o som do computador durante a sessão. */
     var sound: Boolean
         get() = prefs.getBoolean("som", true)

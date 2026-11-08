@@ -18,6 +18,8 @@ internal enum Msg : byte
     Ping = 70, Pong = 71, Restart = 72, RestartResult = 73,
     /// <summary>1.17.0: Ctrl+Alt+Del de verdade (a tela segura do Windows), pelo serviço do Ponte do outro lado.</summary>
     SecureAttention = 74,
+    /// <summary>1.17.1, do controlado: 1 byte, 1 quando o foco entrou num campo de texto e 0 quando saiu.</summary>
+    TextFocus = 75,
     Bye = 99,
 }
 
@@ -40,6 +42,9 @@ internal static class Caps
     public const int AllScreens = 64;
     /// <summary>Só no AuthResult (1.17.0): entende <see cref="Msg.SecureAttention"/> (Ctrl+Alt+Del). Se o serviço não estiver instalado, responde com um aviso.</summary>
     public const int SecureAttention = 128;
+    /// <summary>1.17.1. Visualizador: quer saber quando o foco entra num campo de texto (abre o teclado do celular).
+    /// Controlado: manda <see cref="Msg.TextFocus"/>.</summary>
+    public const int TextFocus = 256;
 }
 
 /// <summary>Teclas que um celular controlado entende como os botões dele (1.14.0).</summary>

@@ -61,6 +61,9 @@ interface SessionListener {
     /** Um trecho do som de lá. Só chega depois de pedido em [Session.sendSettings]. */
     fun onSound(sound: Sound) {}
 
+    /** O foco do teclado lá entrou (true) ou saiu (false) de um campo de texto (computador 1.17.1 em diante). */
+    fun onTextFocus(focused: Boolean) {}
+
     /** Fim da sessão. O motivo vem vazio quando foi este lado que encerrou. */
     fun onClosed(reason: String)
 }
@@ -112,7 +115,7 @@ object PonteClient {
                 Msg.HELLO,
                 mapOf(
                     "Name" to config.deviceName, "User" to config.userName, "Version" to config.version, "Key" to encoder.encodeToString(identity.spki),
-                    "Caps" to (Caps.CURSOR or Caps.AUDIO), "Ticket" to config.ticket.ifEmpty { null },
+                    "Caps" to (Caps.CURSOR or Caps.AUDIO or Caps.TEXT_FOCUS), "Ticket" to config.ticket.ifEmpty { null },
                 ),
             )
             val challenge = channel.expectJson(Msg.CHALLENGE)
@@ -305,6 +308,7 @@ class Session internal constructor(
                     Msg.CURSOR_POS -> parsePointerPosition(message.payload)?.let { listener.onPointerPosition(it[0], it[1], it[2] == 1) }
                     Msg.AUDIO -> AudioCodec.decode(message.payload)?.let { listener.onSound(it) }
                     Msg.CLIPBOARD -> if (message.payload.size <= 256 * 1024) listener.onClipboard(String(message.payload, Charsets.UTF_8))
+                    Msg.TEXT_FOCUS -> if (message.payload.size == 1) listener.onTextFocus(message.payload[0].toInt() == 1)
                     Msg.NOTICE -> if (message.payload.size <= 2048) listener.onNotice(String(message.payload, Charsets.UTF_8))
                     Msg.BYE -> {
                         // A partir da 1.13.0 o computador diz por que encerrou (por falta de uso, por exemplo).

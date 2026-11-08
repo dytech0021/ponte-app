@@ -23,8 +23,8 @@ android {
         minSdk = 26
         targetSdk = 35
         // A cada versÃ£o publicada: versionCode sobe de um em um e versionName acompanha.
-        versionCode = 18
-        versionName = "1.17.0"
+        versionCode = 19
+        versionName = "1.17.1"
         buildConfigField("String", "RELAY_SERVER", "\"${relay.getProperty("server", "")}\"")
         buildConfigField("String", "RELAY_KEY", "\"${relay.getProperty("key", "")}\"")
         // Os links das transmissÃµes de tela (https://servidor/ponte/assistir/#cÃ³digo) abrem no aplicativo: o servidor

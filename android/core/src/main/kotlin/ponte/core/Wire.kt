@@ -29,6 +29,8 @@ object Msg {
     const val NOTICE = 60
     /** Ctrl+Alt+Del no computador acessado (1.17.0), sem conteúdo. Só quando ele oferece [Caps.SECURE_ATTENTION]. */
     const val SECURE_ATTENTION = 74
+    /** Do computador (1.17.1): 1 byte, 1 quando o foco entrou num campo de texto e 0 quando saiu. */
+    const val TEXT_FOCUS = 75
     const val BYE = 99
 }
 
@@ -44,6 +46,8 @@ object Caps {
     const val PHONE = 16
     /** Só no AuthResult (1.17.0): o computador acessado manda Ctrl+Alt+Del de verdade (com o serviço instalado). */
     const val SECURE_ATTENTION = 128
+    /** No Hello (1.17.1): quer saber quando o foco entra num campo de texto lá, para abrir o teclado do celular. */
+    const val TEXT_FOCUS = 256
 }
 
 /**

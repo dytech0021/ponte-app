@@ -65,7 +65,11 @@ class SessionActivity : Activity() {
     private var targetText = ""
     private var targetKey = ""
     private var keyboardOpen = false
-    private var barCollapsed = false
+    // A barra de comandos abre recolhida: só a seta, que pode ser arrastada para qualquer canto.
+    private var barCollapsed = true
+    private lateinit var barBox: View
+    private var barX = 0.5f
+    private var barY = 0f
     private var fullScreen = false
     private var modeButton: TextView? = null
     private var screenIndex = 0
@@ -89,6 +93,12 @@ class SessionActivity : Activity() {
         status = findViewById(R.id.estado)
         notice = findViewById(R.id.aviso)
         bar = findViewById(R.id.barra)
+        barBox = findViewById(R.id.barraRolagem)
+        barX = store.barX
+        barY = store.barY
+        // A barra muda de largura ao abrir e fechar, e a tela muda com o teclado e ao girar: a posição é refeita.
+        barBox.addOnLayoutChangeListener { _, _, _, _, _, _, _, _, _ -> applyBarPosition() }
+        (barBox.parent as View).addOnLayoutChangeListener { _, _, _, _, _, _, _, _, _ -> applyBarPosition() }
         keysBar = findViewById(R.id.teclasRolagem)
         keysRow = findViewById(R.id.teclas)
 
@@ -161,7 +171,8 @@ class SessionActivity : Activity() {
         store.recordConnection(target, connected.hostName, connected.fingerprint, connected.paired)
         session = connected
         ui.post {
-            if (connected.isPhone) buildBar()
+            // Agora se sabe se lá é um celular e quantos monitores o computador tem.
+            buildBar()
             onConnected(connected, saved?.paired == true, saved?.autoAccess == true)
         }
 
@@ -198,6 +209,10 @@ class SessionActivity : Activity() {
 
             override fun onNotice(text: String) {
                 ui.post { showNotice(text) }
+            }
+
+            override fun onTextFocus(focused: Boolean) {
+                ui.post { textFocusChanged(focused) }
             }
 
             override fun onClosed(reason: String) {
@@ -415,8 +430,16 @@ class SessionActivity : Activity() {
     private fun buildBar() {
         bar.removeAllViews()
         if (barCollapsed) {
-            chip(bar, "▼") { barCollapsed = false; buildBar() }
+            dragHandle(chip(bar, "▼") { barCollapsed = false; buildBar() })
             return
+        }
+        // Computador com 2 ou mais monitores: um botão para cada, o que está na tela fica aceso.
+        val current = session
+        if (current != null && !current.isPhone && current.screens.size > 1) {
+            for (s in current.screens) {
+                val button = chip(bar, "${s.index + 1}") { showScreen(s.index) }
+                if (s.index == screenIndex) button.setBackgroundResource(R.drawable.chip_ativo)
+            }
         }
         chip(bar, "Teclado") { toggleKeyboard() }
         // Do outro lado está um celular (1.14.0): os botões dele vão como teclas que ele entende.
@@ -431,7 +454,92 @@ class SessionActivity : Activity() {
         chip(bar, "Tela cheia") { setFullScreen(true) }
         chip(bar, "Mais") { showMore(it) }
         chip(bar, "Sair") { confirmLeave() }
-        chip(bar, "▲") { barCollapsed = true; buildBar() }
+        dragHandle(chip(bar, "▲") { barCollapsed = true; buildBar() })
+    }
+
+    /** Mostra o monitor [index] do computador e acende o botão dele na barra. */
+    private fun showScreen(index: Int) {
+        if (index == screenIndex) return
+        screenIndex = index
+        sendSettings()
+        buildBar()
+        showNotice("Monitor ${index + 1}")
+    }
+
+    /**
+     * A seta da barra: um toque abre ou fecha a barra; arrastada, leva a barra para qualquer canto da tela.
+     * A posição fica guardada para as próximas sessões.
+     */
+    @android.annotation.SuppressLint("ClickableViewAccessibility")
+    private fun dragHandle(handle: View) {
+        val slop = android.view.ViewConfiguration.get(this).scaledTouchSlop
+        var downX = 0f
+        var downY = 0f
+        var startX = 0f
+        var startY = 0f
+        var moved = false
+        handle.setOnTouchListener { view, event ->
+            when (event.actionMasked) {
+                android.view.MotionEvent.ACTION_DOWN -> {
+                    downX = event.rawX
+                    downY = event.rawY
+                    startX = barBox.translationX
+                    startY = barBox.translationY
+                    moved = false
+                    view.isPressed = true
+                    // A rolagem da barra não pode roubar o arrasto.
+                    view.parent.requestDisallowInterceptTouchEvent(true)
+                }
+                android.view.MotionEvent.ACTION_MOVE -> {
+                    val dx = event.rawX - downX
+                    val dy = event.rawY - downY
+                    if (!moved && dx * dx + dy * dy > slop * slop) {
+                        moved = true
+                        view.isPressed = false
+                    }
+                    if (moved) moveBarTo(startX + dx, startY + dy)
+                }
+                android.view.MotionEvent.ACTION_UP -> {
+                    view.isPressed = false
+                    if (moved) saveBarPosition() else view.performClick()
+                }
+                android.view.MotionEvent.ACTION_CANCEL -> {
+                    view.isPressed = false
+                    if (moved) saveBarPosition()
+                }
+            }
+            true
+        }
+    }
+
+    // A posição é guardada como fração do espaço livre: com a seta encostada à direita, a barra aberta também
+    // encosta à direita, e girar o aparelho não a joga para fora da tela.
+    private fun barRange(): Pair<Float, Float> {
+        val parent = barBox.parent as View
+        val margin = 6 * resources.displayMetrics.density
+        val freeX = parent.width - parent.paddingLeft - parent.paddingRight - barBox.width - 2 * margin
+        val freeY = parent.height - parent.paddingTop - parent.paddingBottom - barBox.height - 2 * margin
+        return maxOf(freeX, 0f) to maxOf(freeY, 0f)
+    }
+
+    private fun applyBarPosition() {
+        val margin = 6 * resources.displayMetrics.density
+        val (freeX, freeY) = barRange()
+        barBox.translationX = margin + barX * freeX
+        barBox.translationY = margin + barY * freeY
+    }
+
+    private fun moveBarTo(x: Float, y: Float) {
+        val margin = 6 * resources.displayMetrics.density
+        val (freeX, freeY) = barRange()
+        barX = if (freeX > 0) ((x - margin) / freeX).coerceIn(0f, 1f) else 0.5f
+        barY = if (freeY > 0) ((y - margin) / freeY).coerceIn(0f, 1f) else 0f
+        applyBarPosition()
+    }
+
+    private fun saveBarPosition() {
+        store.barX = barX
+        store.barY = barY
     }
 
     private fun paintMode() {
@@ -448,7 +556,27 @@ class SessionActivity : Activity() {
         )
     }
 
+    // O teclado aberto sozinho (1.17.1): abre quando um toque põe o foco num campo de texto lá, e fecha quando um
+    // toque tira o foco do campo, se foi aberto assim. Sem toque recente (o computador mudou o foco sozinho), nada muda.
+    private var keyboardAuto = false
+
+    private fun textFocusChanged(focused: Boolean) {
+        if (session == null || isFinishing) return
+        val recentTouch = android.os.SystemClock.uptimeMillis() - screen.lastTouch < 3000
+        if (!recentTouch) return
+        if (focused && !keyboardOpen) {
+            screen.showKeyboard()
+            if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R) keyboardOpen = true
+            keyboardAuto = true
+        } else if (!focused && keyboardAuto) {
+            if (keyboardOpen) screen.hideKeyboard()
+            if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R) keyboardOpen = false
+            keyboardAuto = false
+        }
+    }
+
     private fun toggleKeyboard() {
+        keyboardAuto = false
         // Antes do Android 11 não dá para perguntar ao sistema se o teclado está aberto; vale o que foi pedido por último.
         if (keyboardOpen) screen.hideKeyboard() else screen.showKeyboard()
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R) keyboardOpen = !keyboardOpen
@@ -534,6 +662,7 @@ class SessionActivity : Activity() {
             .setSingleChoiceItems(labels.toTypedArray(), screens.indexOfFirst { it.index == screenIndex }) { dialog, which ->
                 screenIndex = screens[which].index
                 sendSettings()
+                buildBar()
                 dialog.dismiss()
             }
             .show()
