@@ -165,6 +165,11 @@ internal sealed class AppConfig
     /// <summary>Ao acessar outro computador, tocar aqui o som de lá.</summary>
     public bool PlaySound { get; set; } = true;
     /// <summary>
+    /// Ao acessar um computador com várias telas, abrir cada uma numa janela, na mesma disposição de lá, ocupando o
+    /// monitor daqui (1.17.3).
+    /// </summary>
+    public bool SimulateScreens { get; set; }
+    /// <summary>
     /// Minutos sem uso (sem mouse, teclado ou toque de quem acessa) até a sessão neste computador ser encerrada; 0 é nunca.
     /// Quando quem acessa manda o tempo dele, vale o dele.
     /// </summary>

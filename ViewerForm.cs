@@ -369,6 +369,15 @@ internal sealed class ViewerForm : Form
         _eachWindow.Click += (_, _) => { if (_allScreens) ShowScreen(_screen); else OpenScreenWindows(); };
         screens.DropDownItems.Add(new ToolStripSeparator());
         screens.DropDownItems.Add(_eachWindow);
+        _simulate = new ToolStripMenuItem("Simular a disposição das telas de lá")
+        {
+            Enabled = session.HostHasAllScreens && session.Screens.Length > 1,
+            Checked = config?.SimulateScreens == true,
+            ToolTipText = "Cada tela numa janela, na mesma posição do Windows de lá, no maior tamanho que cabe neste monitor. " +
+                "As janelas continuam podendo ser arrastadas e redimensionadas. Fica marcado para as próximas conexões.",
+        };
+        _simulate.Click += (_, _) => SimulateClicked();
+        screens.DropDownItems.Add(_simulate);
         // Perfis: escolher um aplica a qualidade e o vídeo dele; mudar a qualidade ou o vídeo muda o perfil em uso.
         _profileButton = new ToolStripDropDownButton { ToolTipText = "Perfil de transmissão: o que for mudado nele fica guardado para as próximas conexões" };
         foreach (var (key, name) in StreamProfile.All)
@@ -459,7 +468,7 @@ internal sealed class ViewerForm : Form
         };
         keys.DropDownItems.Add(new ToolStripSeparator()); keys.DropDownItems.Add(restart);
 
-        var full = new ToolStripButton("Tela cheia") { DisplayStyle = ToolStripItemDisplayStyle.Text };
+        var full = _fullButton = new ToolStripButton("Tela cheia") { DisplayStyle = ToolStripItemDisplayStyle.Text };
         full.Click += (_, _) => ToggleFullScreen(full);
         var file = new ToolStripButton("Enviar arquivo...") { DisplayStyle = ToolStripItemDisplayStyle.Text };
         file.Click += async (_, _) => await SendFileAsync();
@@ -536,6 +545,7 @@ internal sealed class ViewerForm : Form
             _started = true;
             _lastStatsAt = Stopwatch.GetTimestamp();
             Apply();
+            if (_simulate.Checked && _simulate.Enabled) BeginInvoke(SimulateLayout);
         };
     }
 
@@ -564,8 +574,60 @@ internal sealed class ViewerForm : Form
 
     // ---------- cada tela em uma janela ----------
 
-    private readonly ToolStripMenuItem _eachWindow;
+    private readonly ToolStripMenuItem _eachWindow, _simulate;
+    private readonly ToolStripButton _fullButton;
     private readonly List<ScreenWindow> _screenWindows = new();
+    private readonly Dictionary<ScreenWindow, int> _windowScreen = new();
+
+    private void SimulateClicked()
+    {
+        _simulate.Checked = !_simulate.Checked;
+        if (_config is not null)
+        {
+            _config.SimulateScreens = _simulate.Checked;
+            SaveConfig();
+        }
+        if (_simulate.Checked) SimulateLayout();
+    }
+
+    /// <summary>
+    /// "Simular a disposição das telas de lá": cada tela numa janela, montadas como no Windows de lá (uma em cima da
+    /// outra, lado a lado...), na maior escala que cabe no monitor daqui onde esta janela está. Depois disso cada janela
+    /// continua livre para ser arrastada e redimensionada.
+    /// </summary>
+    private void SimulateLayout()
+    {
+        var screens = _session.Screens;
+        if (_closing || !_session.HostHasAllScreens || screens.Length < 2) return;
+        if (_fullScreen) ToggleFullScreen(_fullButton);
+        if (WindowState != FormWindowState.Normal) WindowState = FormWindowState.Normal;
+        if (!_allScreens) OpenScreenWindows();
+        if (!_allScreens) return;
+
+        var area = Screen.FromControl(this).WorkingArea;
+        int left = screens.Min(s => s.X), top = screens.Min(s => s.Y);
+        int width = screens.Max(s => s.X + s.Width) - left, height = screens.Max(s => s.Y + s.Height) - top;
+        // Cada janela tem borda e barra de título: quantas ficam acima e à esquerda de cada tela entra na conta.
+        var frame = Size - ClientSize;
+        int RowsAbove(ScreenInfo s) => screens.Where(o => o.Y + o.Height <= s.Y).Select(o => o.Y).Distinct().Count();
+        int ColumnsLeft(ScreenInfo s) => screens.Where(o => o.X + o.Width <= s.X).Select(o => o.X).Distinct().Count();
+        int rows = screens.Max(RowsAbove) + 1, columns = screens.Max(ColumnsLeft) + 1;
+        double scale = Math.Min((area.Width - columns * frame.Width) / (double)width, (area.Height - rows * frame.Height) / (double)height);
+        if (scale <= 0) return;
+        int originX = area.X + (int)((area.Width - (width * scale + columns * frame.Width)) / 2);
+        int originY = area.Y + (int)((area.Height - (height * scale + rows * frame.Height)) / 2);
+
+        foreach (var s in screens)
+        {
+            Form? window = s.Index == _screen ? this : _windowScreen.FirstOrDefault(p => p.Value == s.Index).Key;
+            if (window is null || window.IsDisposed) continue;
+            if (window.WindowState != FormWindowState.Normal) window.WindowState = FormWindowState.Normal;
+            window.ClientSize = new Size(Math.Max(1, (int)Math.Round(s.Width * scale)), Math.Max(1, (int)Math.Round(s.Height * scale)));
+            window.Location = new Point(originX + (int)Math.Round((s.X - left) * scale) + ColumnsLeft(s) * frame.Width,
+                originY + (int)Math.Round((s.Y - top) * scale) + RowsAbove(s) * frame.Height);
+        }
+        _view.Focus();
+    }
     // Com todas as telas numa imagem só, esta janela mostra a tela _screen e cada uma das outras ganha uma ScreenWindow.
     private bool _allScreens;
 
@@ -593,6 +655,8 @@ internal sealed class ViewerForm : Form
         Text = $"{_session.HostName} ({_session.Target}) - Tela {_screen + 1} - Ponte {Updater.Current}";
         // Esta janela fica igual às das outras telas: só a imagem, no formato da tela. Os comandos aparecem com o mouse no
         // alto da janela, como na tela cheia.
+        // Do tamanho de uma tela (pequena como as outras janelas, se for preciso para simular a disposição de lá).
+        MinimumSize = new Size(160, 120);
         if (!_fullScreen)
         {
             _sizeBeforeWindows = WindowState == FormWindowState.Normal ? ClientSize : null;
@@ -617,9 +681,11 @@ internal sealed class ViewerForm : Form
             window.ClientSize = client;
             window.Location = new Point(area.X + (area.Width - window.Width) / 2 + cascade * 32, area.Y + (area.Height - window.Height) / 2 + cascade * 32);
             if (area == Screen.FromControl(this).WorkingArea) cascade++;
+            _windowScreen[window] = s.Index;
             window.FormClosed += (_, _) =>
             {
                 _screenWindows.Remove(window);
+                _windowScreen.Remove(window);
                 // Fechou a última: volta a mandar só a tela desta janela, que é menos imagem pela rede.
                 if (_allScreens && _screenWindows.Count == 0 && !_closing) ShowScreen(_screen);
             };
@@ -675,6 +741,7 @@ internal sealed class ViewerForm : Form
             if (!_fullScreen)
             {
                 SetBarsFloating(false);
+                MinimumSize = new Size(520, 360);
                 if (_sizeBeforeWindows is { } size && WindowState == FormWindowState.Normal) ClientSize = size;
             }
             _sizeBeforeWindows = null;
