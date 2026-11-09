@@ -329,13 +329,12 @@ internal sealed class Account
 
     private static string Base64Url(byte[] data) => Convert.ToBase64String(data).TrimEnd('=').Replace('+', '-').Replace('/', '_');
 
-    // Como administrador, o navegador abriria como administrador também; pelo Explorer ele abre como o usuário.
+    // Como administrador, o navegador abriria como administrador também; pela área de trabalho ele abre como o usuário.
+    // Se ela não atender, abre direto (como administrador) em vez de não abrir.
     private static void OpenBrowser(string url)
     {
-        var start = Elevation.IsElevated
-            ? new ProcessStartInfo("explorer.exe") { ArgumentList = { url } }
-            : new ProcessStartInfo(url) { UseShellExecute = true };
-        Process.Start(start)?.Dispose();
+        if (Elevation.IsElevated && DesktopShell.Open(url)) return;
+        Process.Start(new ProcessStartInfo(url) { UseShellExecute = true })?.Dispose();
     }
 
     public static void OpenSite(string path) => OpenBrowser(SiteUrl + path);
