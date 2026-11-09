@@ -1,27 +1,28 @@
 # Protocolo de rede
 
-Este documento descreve o que trafega entre dois computadores com o Ponte e entre eles e o servidor
-de retransmissão. Vale para a versão 1.5.1. O código de referência está em `Transport.cs`,
-`Protocol.cs`, `HostService.cs`, `ViewerSession.cs` e `relay/relay.js`. O aplicativo Android fala
-o mesmo protocolo; o código dele está em `android/core`.
+Este documento descreve o que trafega entre dois aparelhos com o Ponte e entre eles e o servidor
+de retransmissão. Vale para a versão 1.17.4. O código de referência está em `Transport.cs`,
+`Protocol.cs`, `Ticket.cs`, `WebChannel.cs`, `HostService.cs`, `ViewerSession.cs` e `relay/relay.js`.
+O aplicativo Android fala o mesmo protocolo; o código dele está em `android/core`. O Ponte do
+navegador também, trocando o TLS pelo canal da seção 3.2.
 
-Termos usados aqui: **visualizador** é o computador que acessa; **controlado** é o que é acessado.
+Termos usados aqui: **visualizador** é quem acessa; **controlado** é quem é acessado.
 
 ## 1. Camadas
 
 ```
 mensagens do Ponte (tipo + tamanho + conteúdo)
-TLS 1.2 ou 1.3, de ponta a ponta entre os dois computadores
+TLS 1.2 ou 1.3 (programas) ou WPONTE1 (navegador), de ponta a ponta entre os dois aparelhos
 [só por ID] uma linha de texto para o servidor de retransmissão, que depois só repassa bytes
-TCP
+TCP (ou WebSocket, para o navegador)
 ```
 
-Há dois caminhos para chegar ao TLS:
+Há dois caminhos para chegar à cifra:
 
 - **Direto:** o visualizador abre TCP na porta do controlado (padrão 7411) e começa o TLS.
 - **Por ID:** os dois abrem conexões de saída para o servidor de retransmissão (padrão 7412), que
-  junta as duas e passa a copiar os bytes de uma para a outra. O TLS começa depois disso e é
-  negociado entre os dois computadores, não com o servidor.
+  junta as duas e passa a copiar os bytes de uma para a outra. A cifra começa depois disso e é
+  negociada entre os dois aparelhos, não com o servidor.
 
 ## 2. Servidor de retransmissão
 
@@ -36,13 +37,17 @@ PONTE <COMANDO> <argumento> [chave]
 | Comando | Argumento | Quem envia | Finalidade |
 |---|---|---|---|
 | `HOST` | ID de 9 dígitos | controlado | Registrar-se como alcançável por aquele ID. |
-| `CONNECT` | ID de 9 dígitos | visualizador | Pedir conexão ao computador com aquele ID. |
+| `CONNECT` | ID de 9 dígitos | visualizador | Pedir conexão ao aparelho com aquele ID. |
 | `ACCEPT` | token de 32 dígitos hexadecimais | controlado | Atender um pedido, numa conexão nova. |
-| `MANIFEST` | `0` | qualquer cópia | Baixar o manifesto da atualização. |
-| `DOWNLOAD` | `0` | qualquer cópia | Baixar o executável da atualização. |
+| `TICKET` | SHA-256 da chave do aparelho | qualquer cópia | Pedir o bilhete da conta. *Desde a 1.17.0.* |
+| `MANIFEST` | `0` | qualquer cópia | Baixar o manifesto da atualização do Windows. |
+| `DOWNLOAD` | `0` | qualquer cópia | Baixar o `Ponte.exe`. |
+| `ANDROID_MANIFEST` | `0` | aplicativo Android | Baixar o manifesto da atualização do Android. |
+| `ANDROID_DOWNLOAD` | `0` | aplicativo Android | Baixar o `Ponte.apk`. |
+| `VIDEO` | SHA-256 do pacote | Ponte do Windows | Baixar o componente de vídeo (FFmpeg comprimido). |
 
 A linha precisa casar com a expressão
-`^PONTE (HOST|CONNECT|ACCEPT|MANIFEST|DOWNLOAD) ([0-9a-f]{1,64})(?: ([A-Za-z0-9_-]{1,128}))?$`;
+`^PONTE (HOST|CONNECT|ACCEPT|MANIFEST|DOWNLOAD|ANDROID_MANIFEST|ANDROID_DOWNLOAD|VIDEO|TICKET) ([0-9a-f]{1,64})(?: ([A-Za-z0-9_-]{1,128}))?$`;
 qualquer outra coisa derruba a conexão. Se o servidor foi iniciado com `PONTE_KEY`, a chave é
 obrigatória em todos os comandos, e uma chave errada recebe `ERR key`.
 
@@ -51,12 +56,15 @@ Respostas de erro têm a forma `ERR <motivo>`:
 | Resposta | Significado |
 |---|---|
 | `ERR key` | Chave de acesso ausente ou errada. |
-| `ERR proof` | O computador não provou ser dono do ID que tentou registrar. |
-| `ERR offline` | Não há computador registrado com aquele ID. |
+| `ERR proof` | O aparelho não provou ser dono do ID que tentou registrar. |
+| `ERR offline` | Não há aparelho registrado com aquele ID. |
 | `ERR busy` | Há pedidos demais aguardando atendimento. |
-| `ERR timeout` | O computador chamado não atendeu em 20 segundos. |
+| `ERR timeout` | O aparelho chamado não atendeu em 20 segundos. |
 | `ERR token` | Token de atendimento desconhecido ou já usado. |
-| `ERR none` | Não há arquivo de atualização para entregar. |
+| `ERR none` | Não há arquivo para entregar. |
+| `ERR naoliberado <email>` | A conta não está na lista de liberadas. |
+| `ERR conta` | O token da conta venceu ou é inválido. |
+| `ERR servidor` | O servidor não conseguiu conferir a conta agora. |
 
 ### 2.2 Registro do controlado
 
@@ -98,7 +106,33 @@ sequenceDiagram
 O que cada lado tiver enviado logo depois da própria linha é repassado ao outro quando as conexões
 são unidas. Quando uma das duas fecha, o servidor fecha a outra.
 
-### 2.4 Arquivos de atualização
+### 2.4 Bilhete da conta (1.17.0)
+
+```
+cópia    → PONTE TICKET <sha256 da chave do aparelho, minúsculo> <chave>
+cópia    → <token de acesso da conta>
+servidor → TICKET <bilhete>
+```
+
+O servidor chama `public.ponte_conta()` no Supabase do FilaBox com esse token. Se a conta estiver
+liberada, ele assina o bilhete com `PONTE_TICKET_KEY` (EC P-256). Senão responde `ERR naoliberado`,
+`ERR conta` ou `ERR servidor`.
+
+**Formato do bilhete:** `<corpo em base64url>.<assinatura em base64url>`, com a assinatura ECDSA
+P-256/SHA-256 (64 bytes, `r||s`) sobre os bytes do corpo. O corpo é um JSON de quatro campos:
+
+| Campo | Conteúdo |
+|---|---|
+| `v` | Versão do formato. Hoje `1`. |
+| `e` | O e-mail da conta. |
+| `k` | SHA-256 (hexadecimal maiúsculo) da chave pública do aparelho, em SPKI. |
+| `x` | Quando vence, em segundos desde 1970. |
+
+O bilhete vale 14 dias e é renovado quando faltam 7. Quem confere exige: assinatura válida pela
+chave do emissor embutida no programa, `v` igual a 1, `e` não vazio, `k` igual ao resumo da chave
+daquele aparelho e `x` no futuro. Os detalhes de uso estão em [conta.md](conta.md).
+
+### 2.5 Arquivos de atualização e de vídeo
 
 ```
 cópia    → PONTE MANIFEST 0 <chave>
@@ -106,11 +140,18 @@ servidor → OK <tamanho em bytes>
 servidor → <tamanho> bytes e fim da conexão
 ```
 
-`MANIFEST` entrega `manifest.json` (até 8 KiB) e `DOWNLOAD` entrega `Ponte.exe` (até 64 MiB), ambos
-da pasta de atualização do servidor. Sem TLS: a proteção é a assinatura conferida pelo programa
-(veja [seguranca.md](seguranca.md)).
+| Comando | Arquivo | Limite |
+|---|---|---|
+| `MANIFEST` | `manifest.json` | 8 KiB |
+| `DOWNLOAD` | `Ponte.exe` | 64 MiB |
+| `ANDROID_MANIFEST` | `android-manifest.json` | 8 KiB |
+| `ANDROID_DOWNLOAD` | `Ponte.apk` | 64 MiB |
+| `VIDEO` | `video-<sha256>.br` | 128 MiB |
 
-### 2.5 Limites do servidor
+Sem TLS: a proteção é a assinatura conferida pelo programa, e no caso do vídeo o resumo fixado
+dentro do executável assinado (veja [seguranca.md](seguranca.md)).
+
+### 2.6 Limites do servidor
 
 | Limite | Valor |
 |---|---|
@@ -122,7 +163,16 @@ da pasta de atualização do servidor. Sem TLS: a proteção é a assinatura con
 | Prazo para o controlado atender | 20 s |
 | Registro sem atividade | 90 s |
 
-## 3. TLS
+### 2.7 WebSocket, para o navegador
+
+O servidor também atende WebSocket, atrás do nginx, na porta de `PONTE_WS_PORT` (o caminho público
+é `/ponte/ws`). Pela WebSocket só valem **`CONNECT`** e **`TICKET`**: a página só acessa, nunca é
+acessada. A primeira mensagem é `PONTE CONNECT <id>`; depois os bytes passam direto para o aparelho
+chamado, já cifrados de ponta a ponta pela própria página.
+
+## 3. Cifra de ponta a ponta
+
+### 3.1 TLS, entre programas
 
 - Versões aceitas: TLS 1.2 e 1.3.
 - O controlado é o lado servidor do TLS e apresenta o certificado próprio: autoassinado, ECDSA
@@ -133,7 +183,28 @@ da pasta de atualização do servidor. Sem TLS: a proteção é a assinatura con
   - **Sempre:** a impressão digital do certificado (SHA-256 do certificado inteiro) é guardada na
     primeira conexão. Se mudar numa conexão posterior, o usuário é avisado e decide.
 
-### Cálculo do ID
+### 3.2 WPONTE1, para o navegador
+
+O navegador não faz TLS com um certificado sem autoridade certificadora. O canal `WPONTE1` faz o
+mesmo papel com o que a criptografia do navegador oferece (ECDH, ECDSA, HKDF e AES-GCM, todos P-256
+e SHA-256):
+
+```
+navegador  → computador: "WPONTE1" | chave efêmera ECDH (65 bytes, ponto não comprimido) | 32 bytes aleatórios
+computador → navegador : chave efêmera (65) | tamanho do certificado (2 bytes) | certificado | assinatura (64, r||s)
+```
+
+A assinatura é da chave do computador (a mesma do TLS, da qual sai o ID) sobre
+`"ponte-web-1\n" | SHA-256(mensagem do navegador) | chave efêmera do computador | SHA-256(certificado)`.
+O navegador confere o ID e a assinatura antes de mandar qualquer coisa.
+
+As chaves vêm de HKDF-SHA256 sobre o segredo ECDH, com sal igual ao SHA-256 das duas mensagens e
+informação `"ponte-web-1 c2s"` (navegador para computador) ou `"ponte-web-1 s2c"` (o contrário),
+32 bytes cada. Depois disso as mensagens do Ponte seguem em AES-GCM.
+
+O mesmo canal está em `WebChannel.cs` e em `core/.../WebSecure.kt`.
+
+### 3.3 Cálculo do ID
 
 ```
 resumo = SHA-256(chave pública em formato SPKI)
@@ -144,7 +215,7 @@ O resultado tem sempre 9 dígitos. O servidor e o programa fazem a mesma conta.
 
 ## 4. Mensagens
 
-Dentro do TLS, cada mensagem tem um cabeçalho de 5 bytes e o conteúdo:
+Dentro da cifra, cada mensagem tem um cabeçalho de 5 bytes e o conteúdo:
 
 | Posição | Tamanho | Conteúdo |
 |---|---|---|
@@ -173,7 +244,17 @@ para 64 MiB. Inteiros dentro do conteúdo são little-endian.
 | 41 | FileChunk | os dois | bytes do arquivo |
 | 42 | FileEnd | os dois | vazio |
 | 50 | Settings | visualizador → controlado | JSON |
+| 51 | VideoStart | controlado → visualizador | JSON, seção 6.12. *Desde a 1.6.0.* |
+| 52 | VideoData | controlado → visualizador | binário, seção 6.12 |
+| 53 | VideoStatus | controlado → visualizador | texto UTF-8 (até 2048 bytes) |
+| 54 | VideoFeedback | visualizador → controlado | JSON (até 1024 bytes) |
 | 60 | Notice | controlado → visualizador | texto UTF-8 |
+| 70 | Ping | visualizador → controlado | 8 bytes |
+| 71 | Pong | controlado → visualizador | os mesmos 8 bytes |
+| 72 | Restart | visualizador → controlado | vazio. *Desde a 1.15.0.* |
+| 73 | RestartResult | controlado → visualizador | vazio se deu certo; texto UTF-8 com o motivo se não |
+| 74 | SecureAttention | visualizador → controlado | vazio (Ctrl+Alt+Del). *Desde a 1.17.0.* |
+| 75 | TextFocus | controlado → visualizador | 1 byte. *Desde a 1.17.1.* |
 | 99 | Bye | os dois | vazio |
 
 Tipos desconhecidos são ignorados durante a sessão.
@@ -184,11 +265,13 @@ Tipos desconhecidos são ignorados durante a sessão.
 sequenceDiagram
     participant V as Visualizador
     participant C as Controlado
-    V->>C: Hello (nome, usuario, versao, chave publica)
-    C->>V: Challenge (senha ativa, sal, iteracoes, nonce, autorizado)
+    V->>C: Hello (nome, usuario, versao, chave publica, bilhete)
+    Note over C: confere o bilhete da conta de quem acessa
+    C->>V: Challenge (senha ativa, sal, iteracoes, nonce, autorizado, bilhete)
+    Note over V: confere o bilhete da conta do computador acessado
     V->>C: AuthResponse (prova da senha, assinatura, pedido de autorizacao)
     Note over C: decide por autorizacao salva, senha ou aceite na tela
-    C->>V: AuthResult (ok, motivo, nome, telas, autorizado, versao)
+    C->>V: AuthResult (ok, motivo, nome, telas, autorizado, versao, caps)
 ```
 
 ### 5.1 Campos
@@ -197,11 +280,13 @@ sequenceDiagram
 
 | Campo | Tipo | Conteúdo |
 |---|---|---|
-| `Name` | texto | Nome do computador do visualizador. |
+| `Name` | texto | Nome do aparelho do visualizador. |
 | `User` | texto | Usuário do Windows no visualizador. |
 | `Version` | texto | Versão do Ponte do visualizador. |
 | `Key` | texto ou nulo | Chave pública do visualizador, SPKI em base64. *Desde a 1.2.0.* |
 | `Caps` | inteiro ou nulo | O que o visualizador sabe receber, em bits (veja abaixo). *Desde a 1.5.0.* |
+| `Resume` | lógico | Esta conexão é a retomada de uma sessão que caiu. *Desde a 1.15.0.* |
+| `Ticket` | texto ou nulo | Bilhete da conta de quem acessa, preso à chave dele. *Desde a 1.17.0.* |
 
 Bits de `Caps`, os mesmos no `Hello` e no `AuthResult`:
 
@@ -212,6 +297,10 @@ Bits de `Caps`, os mesmos no `Hello` e no `AuthResult`:
 | 2 | 4 | Toca o som que chega em `Audio`. | Transmite o som quando pedido em `Settings`. |
 | 3 | 8 | Decodifica vídeo (`VideoStart`/`VideoData`). | Envia vídeo quando pedido. |
 | 4 | 16 | Não usado. | *1.14.0:* o controlado é um celular Android. Quem acessa manda texto pronto (`Text`) e oferece os botões do celular. |
+| 5 | 32 | Não usado. | Gerência. |
+| 6 | 64 | Não usado. | *1.16.0:* aceita `Settings` com `Screen = -1`, que transmite todas as telas numa imagem só. |
+| 7 | 128 | Não usado. | *1.17.0:* entende `SecureAttention` (Ctrl+Alt+Del). Sem o serviço instalado, responde com um aviso. |
+| 8 | 256 | *1.17.1:* quer saber quando o foco entra num campo de texto. | *1.17.1:* manda `TextFocus`. |
 
 Teclas que um celular controlado entende como os botões dele (mensagem `Key`): `0xA6` (VK_BROWSER_BACK) = Voltar,
 `0xAC` (VK_BROWSER_HOME) = Início, `0x5D` (VK_APPS) = Apps recentes. Ele também trata Esc como Voltar, a tecla do
@@ -220,8 +309,7 @@ em texto pelo teclado americano (para visualizadores anteriores à 1.14.0). O ce
 nem `Audio`, e responde a arquivos com um `Notice`.
 
 Sem `Caps` no `Hello` (visualizador anterior à 1.5.0), o controlado não envia `Cursor` e trata o
-visualizador como capaz de receber arquivos, a não ser que o `User` seja `Android`: o aplicativo do
-celular 1.0.0 não gravava arquivos e ainda não avisava isso.
+visualizador como capaz de receber arquivos, a não ser que o `User` seja `Android`.
 
 **Challenge**
 
@@ -232,6 +320,7 @@ celular 1.0.0 não gravava arquivos e ainda não avisava isso.
 | `Iterations` | inteiro | Iterações do PBKDF2. O visualizador recusa valores fora de 1.000 a 2.000.000. |
 | `Nonce` | texto | 32 bytes aleatórios em base64, novos a cada conexão. |
 | `Trusted` | lógico | A chave enviada no Hello está na lista de autorizados. *Desde a 1.2.0.* |
+| `Ticket` | texto ou nulo | Bilhete da conta do computador acessado, preso à chave do certificado dele. *Desde a 1.17.0.* |
 
 **AuthResponse**
 
@@ -247,8 +336,8 @@ celular 1.0.0 não gravava arquivos e ainda não avisava isso.
 |---|---|---|
 | `Ok` | lógico | A sessão foi aceita. |
 | `Reason` | texto | Mensagem para o usuário quando `Ok` é falso. |
-| `HostName` | texto | Nome do computador controlado. |
-| `Screens` | lista | Monitores: `Index`, `Width`, `Height`, `Primary`. |
+| `HostName` | texto | Nome do aparelho controlado. |
+| `Screens` | lista | Monitores: `Index`, `Width`, `Height`, `Primary` e, desde a 1.16.0, `X` e `Y`, a posição na área de trabalho de lá. |
 | `Paired` | lógico | O visualizador está na lista de autorizados. *Desde a 1.2.0.* |
 | `Version` | texto | Versão do Ponte do controlado. *Desde a 1.2.1.* |
 | `Caps` | inteiro | O que o controlado oferece, nos bits descritos no `Hello`. *Desde a 1.5.0.* |
@@ -260,7 +349,7 @@ verificador = PBKDF2-HMAC-SHA256(senha, sal, iterações, 32 bytes)
 prova       = HMAC-SHA256(chave = verificador, dados = nonce || SHA-256(certificado do controlado))
 ```
 
-O visualizador usa o certificado que ele viu no TLS; o controlado usa o próprio. Se houver um
+O visualizador usa o certificado que ele viu; o controlado usa o próprio. Se houver um
 intermediário apresentando outro certificado, as duas contas dão resultados diferentes.
 
 ### 5.3 Assinatura do visualizador
@@ -278,18 +367,21 @@ não pelo ID de 9 dígitos.
 
 ```mermaid
 flowchart TD
-    A["Chave do Hello esta na lista<br/>e a assinatura confere?"] -->|sim| OK["Entra: autorizacao salva"]
+    T["Bilhete da conta de quem acessa<br/>e valido e preso a chave dele?"] -->|nao| N["Recusa"]
+    T -->|sim| A["Chave do Hello esta na lista<br/>e a assinatura confere?"]
+    A -->|sim| OK["Entra: autorizacao salva"]
     A -->|nao| B["AuthResponse trouxe prova de senha?"]
     B -->|sim| C["Senha ativa e prova correta?"]
     C -->|sim| P["Entra: senha<br/>Se Remember e assinatura valida,<br/>a chave entra na lista"]
-    C -->|nao| N["Recusa"]
+    C -->|nao| N
     B -->|nao| D["Mostra o pedido na tela"]
     D -->|Aceitar| Q["Entra: aceite na tela<br/>Se marcou Sempre permitir<br/>e a assinatura e valida,<br/>a chave entra na lista"]
     D -->|Recusar ou 30 s| N
 ```
 
 Depois de aceita, a sessão ainda pode ser recusada com "Já existe uma sessão em andamento neste
-computador", porque o controlado atende uma por vez.
+computador", porque o controlado atende uma por vez. Uma conexão com `Resume` verdadeiro cuja chave
+está na lista de retomadas bloqueadas também é recusada: ela foi encerrada à mão do outro lado.
 
 ### 5.5 Prazos
 
@@ -300,6 +392,7 @@ computador", porque o controlado atende uma por vez.
 | Hello até Challenge, no visualizador | 20 s |
 | Pedido na tela do controlado | 30 s |
 | Espera pelo AuthResult, no visualizador | 75 s |
+| Pedido do bilhete ao servidor | 25 s |
 
 ## 6. Sessão
 
@@ -352,9 +445,17 @@ Um quadro com dimensões diferentes das atuais recomeça a imagem. Um quadro mal
 
 ### 6.4 Settings (tipo 50)
 
-JSON com `Screen` (índice do monitor), `Quality` (qualidade do JPEG; o controlado limita a faixa
-de 10 a 95) e, desde a 1.5.0, `Audio` (lógico: o visualizador quer o som). Quando o monitor ou a
-qualidade mudam, o controlado manda a tela inteira no quadro seguinte.
+JSON com:
+
+| Campo | Conteúdo |
+|---|---|
+| `Screen` | Índice do monitor, ou `-1` para todas as telas numa imagem só (1.16.0, com o bit 6 de `Caps`). |
+| `Quality` | Qualidade do JPEG; o controlado limita a faixa de 10 a 95. |
+| `Audio` | O visualizador quer o som. *Desde a 1.5.0.* |
+| `Video` | Opções de vídeo (seção 6.12), ou nulo para o modo JPEG. *Desde a 1.6.0.* |
+| `IdleSeconds` | Tempo sem uso depois do qual quem acessa quer a sessão encerrada: 0 é nunca, nulo deixa valer o do controlado. *Desde a 1.13.0.* |
+
+Quando o monitor ou a qualidade mudam, o controlado manda a tela inteira no quadro seguinte.
 
 O som começa desligado em toda sessão. Só é transmitido depois de um `Settings` com `Audio`
 verdadeiro, e só se o dono do computador controlado não o tiver desligado nas Configurações.
@@ -370,13 +471,14 @@ de 100.000 caracteres.
 2. `FileChunk`: blocos de até 64 KiB. Mais bytes que o anunciado encerram a sessão.
 3. `FileEnd`: se chegaram exatamente `Size` bytes, o arquivo é mantido; senão é apagado.
 
-Um computador envia um arquivo de cada vez, nos dois sentidos: o visualizador pelo botão **Enviar
+Um aparelho envia um arquivo de cada vez, nos dois sentidos: o visualizador pelo botão **Enviar
 arquivo...** da janela da sessão, o controlado pelo botão de mesmo nome no aviso de sessão ativa.
 
 ### 6.7 Notice (tipo 60) e Bye (tipo 99)
 
-`Notice` leva um texto (até 2048 bytes) para mostrar a quem está operando; hoje é usado para avisar
-que o Windows bloqueou mouse e teclado. `Bye` encerra a sessão de forma limpa.
+`Notice` leva um texto (até 2048 bytes) para mostrar a quem está operando: hoje é usado para avisar
+que o Windows bloqueou mouse e teclado, que o Ctrl+Alt+Del precisa do serviço, ou que o celular
+acessado não recebe arquivos. `Bye` encerra a sessão de forma limpa.
 
 ### 6.8 Text (tipo 22)
 
@@ -447,8 +549,58 @@ certo mesmo sem ter tocado na tela (o aplicativo do celular, no modo Toque).
 
 O controlado confere a posição a cada ciclo da captura (cerca de 20 vezes por segundo) e só envia
 quando ela muda, e só a quem declarou o bit 1 de `Caps` no `Hello`. Fora do monitor mostrado, x e
-y vão zerados. O Ponte do Windows, como visualizador, recebe e não usa: o ponteiro de quem está
-acessando já está no lugar.
+y vão zerados.
+
+### 6.12 Vídeo (tipos 51 a 54), desde a 1.6.0
+
+Quando o `Settings` traz `Video` com codec `h264` ou `h265`, o controlado para de mandar `Frame` e
+passa a mandar um fluxo de vídeo.
+
+**`VideoOptions`**, dentro do `Settings`:
+
+| Campo | Conteúdo |
+|---|---|
+| `Fps` | 20, 30, 60 ou 120. Outro valor vira 20. |
+| `Codec` | `jpeg`, `h264` ou `h265`. Outro valor vira `jpeg`. |
+| `Chroma444` | Cores sem redução. No modo compatível, usa PNG RGB sem perdas. |
+| `UltraLowLatency` | Ajusta o codificador para latência mínima. |
+| `BitrateMbps` | De 1 a 100. |
+| `MaxHeight` | 480, 720, 900 ou 1080; 0 mantém o tamanho da tela. |
+
+**`VideoStart` (51)**, JSON de até 4 KiB: `Id` do fluxo, `Width`, `Height`, `Codec`, `Encoder` (qual
+placa está codificando) e os demais dados do fluxo. Um `Id` novo recomeça a decodificação.
+
+**`VideoData` (52)**: os pacotes do fluxo, com o `Id` nos primeiros 4 bytes.
+
+**`VideoStatus` (53)**: texto para a barra de estado do visualizador — "procurando a placa de vídeo
+que codifica H.265", "baixando o componente de vídeo: 42 %", o motivo de ter caído para JPEG.
+
+**`VideoFeedback` (54)**: JSON com `Id`, `Failed` e `Reason`. O visualizador usa para avisar que não
+conseguiu decodificar aquele fluxo; o controlado então volta para JPEG.
+
+### 6.13 Ping e Pong (tipos 70 e 71)
+
+O visualizador manda 8 bytes (um instante do relógio dele) e o controlado devolve os mesmos 8 bytes.
+Serve para medir o tempo de ida e volta, que alimenta a qualidade automática e a barra de estado.
+
+### 6.14 Restart e RestartResult (tipos 72 e 73), desde a 1.15.0
+
+`Restart` (vazio) pede o reinício do computador controlado. A resposta `RestartResult` vem vazia
+quando o reinício foi pedido ao Windows, ou com um texto explicando por que não: "O dono desativou o
+reinício remoto nas configurações" ou o erro do próprio Windows.
+
+### 6.15 SecureAttention (tipo 74), desde a 1.17.0
+
+Vazio. Pede o Ctrl+Alt+Del de verdade, a tela segura do Windows, que só o serviço do Ponte consegue
+acionar. O controlado só anuncia o bit 7 de `Caps` quando entende a mensagem; sem o serviço
+instalado, ele responde com um `Notice` explicando.
+
+### 6.16 TextFocus (tipo 75), desde a 1.17.1
+
+Um byte: `1` quando o foco do teclado entrou num campo de texto no computador controlado, `0` quando
+saiu. Só é enviado a quem declarou o bit 8 de `Caps` no `Hello`, e só quando o estado muda. O
+controlado confere a cada 300 ms. O aplicativo Android usa isso para abrir o teclado do celular
+sozinho.
 
 ## 7. Convivência entre versões
 
@@ -461,16 +613,18 @@ Consequências práticas:
 
 | Visualizador | Controlado | Resultado |
 |---|---|---|
-| 1.5.x | 1.5.x | Tudo disponível: entrada direta, ponteiro de lá, som e arquivo nos dois sentidos. |
-| 1.5.x | 1.2.x, 1.3.x ou 1.4.x | Sem ponteiro de lá (aparece a seta comum) e sem som: o controlado não os envia. |
-| 1.2.x, 1.3.x ou 1.4.x | 1.5.x | Sem ponteiro de lá e sem som: o visualizador não os pede. O controlado pode enviar arquivo. |
-| 1.2.x | 1.2.x | Entrada direta disponível. |
-| 1.2.x | 1.0 ou 1.1 | Conecta por senha ou aceite. Sem entrada direta: o controlado não conhece a lista de autorizados. |
-| 1.0 ou 1.1 | 1.2.x | Conecta por senha ou aceite. Sem entrada direta: o visualizador não envia chave nem assinatura. |
+| 1.17.x | 1.17.x | Tudo disponível. |
+| anterior à 1.17.0 | 1.17.0 ou mais novo | **Não entra**: sem bilhete da conta. |
+| 1.17.0 ou mais novo | anterior à 1.17.0 | **Não entra**: o controlado não manda bilhete. |
+| 1.17.1 | 1.17.0 | Sem o aviso de campo de texto: o controlado não anuncia o bit 8. |
+| 1.17.x | 1.16.x | Sem Ctrl+Alt+Del nem aviso de campo de texto. |
+| 1.17.x | 1.15.x | Sem telas numa imagem só, então sem janela por tela. |
+| 1.6.x ou mais novo | 1.5.x | Sem vídeo: o controlado não o oferece. |
+| 1.5.x | 1.2.x a 1.4.x | Sem ponteiro de lá e sem som. |
+| 1.2.x | 1.0 ou 1.1 | Conecta por senha ou aceite. Sem entrada direta. |
 
 Um tipo de mensagem novo segue a mesma lógica: quem não o conhece ignora. Por isso um visualizador
-só deve usar `Text` quando o `AuthResult` informar versão 1.3.0 ou mais nova; com um controlado
-anterior, o aplicativo Android envia letras e números como teclas e avisa que o resto não vai.
+só deve usar `Text` quando o `AuthResult` informar versão 1.3.0 ou mais nova.
 
 Mudar o significado de um campo existente, ou o formato das mensagens binárias, quebraria essa
 convivência e exigiria negociar a versão no `Hello`.

@@ -1,8 +1,8 @@
 # Ponte para Android
 
 O aplicativo permite acessar, a partir do celular, um computador que esteja com o Ponte aberto.
-Este documento vale para a versão 1.6.4 do aplicativo. A primeira parte é para quem usa; a segunda,
-para quem mantém o código.
+Este documento vale para a versão **1.17.1** do aplicativo (`versionCode` 19). A primeira parte é
+para quem usa; a segunda, para quem mantém o código.
 
 Desde a 1.14.0 o celular também pode **ser acessado** (por um computador, outro celular ou o Ponte no
 navegador): veja a seção 8.
@@ -10,8 +10,10 @@ navegador): veja a seção 8.
 ## 1. Requisitos
 
 - Android 8.0 ou mais novo.
-- No computador, o Ponte 1.3.0 ou mais novo, para o teclado do celular funcionar por inteiro. Com
-  uma versão anterior a conexão funciona, mas só letras e números são digitados.
+- **Uma conta liberada pelo dono do Ponte** (desde a 1.17.0), a mesma do FilaBox. Sem ela o
+  aplicativo não acessa nem é acessado. Veja [conta.md](conta.md).
+- No computador, o Ponte **1.17.0 ou mais novo**: versões anteriores não têm conta e por isso não
+  conectam mais. O teclado automático (seção 5) precisa da 1.17.1 de lá.
 
 ## 2. Instalar e atualizar
 
@@ -53,6 +55,10 @@ baixar; logo depois de instaladas (ou pelo menu) elas encontram a 1.5.2.
 
 ## 4. Conectar
 
+Antes da primeira conexão, entre na conta (a mesma do FilaBox) pelo botão da tela inicial. Sem uma
+conta **liberada pelo dono do Ponte** o aplicativo não conecta nem deixa o celular ser acessado; o
+computador do outro lado também precisa da dele. Veja [conta.md](conta.md).
+
 O que acontece depois de tocar em **Conectar** depende do computador:
 
 - **Ele já autorizou este aparelho:** a sessão abre direto.
@@ -75,12 +81,18 @@ desbloqueado.
 
 ## 5. A sessão
 
-A tela mostra o computador. Deitar o aparelho aproveita melhor o espaço. No alto fica a barra de
-comandos; o botão **▲** a recolhe e **▼** a traz de volta.
+A tela mostra o computador. Deitar o aparelho aproveita melhor o espaço.
+
+A barra de comandos **abre recolhida** (1.17.1): fica só a setinha, que você toca para abrir e
+**pode arrastar para qualquer canto da tela**. A posição é guardada para as próximas sessões.
+
+Quando o computador tem mais de um monitor, a barra traz os números **1**, **2**... para trocar de
+tela num toque; o número da tela em uso fica destacado.
 
 | Botão | O que faz |
 |---|---|
-| Teclado | Abre ou fecha o teclado do celular. |
+| Teclado | Abre ou fecha o teclado do celular. Desde a 1.17.1 ele **abre sozinho** quando você toca num campo de texto do computador, e fecha quando o foco sai dele — desde que você tenha tocado na tela nos últimos 3 segundos, para o teclado não pular sozinho enquanto você só assiste. Tocar no botão desliga esse automático até a próxima vez. |
+| 1, 2, ... | Troca de monitor, quando o computador tem mais de um. |
 | Toque / Touchpad | Alterna o modo de toque (veja abaixo). O botão mostra o modo em uso. |
 | Tela cheia | Esconde a barra de comandos e faz a imagem cobrir o aparelho inteiro, sem faixas, inclusive na área da câmera. O que não cabe se alcança arrastando. O gesto de voltar traz os comandos de volta. A escolha fica guardada para as próximas sessões. |
 | Teclas | Mostra a barra com as teclas que o teclado do celular não tem. |
@@ -150,9 +162,10 @@ Nas configurações, escolha a aparência automática (acompanha o Android), cla
 | Sair do aplicativo | A sessão não tem serviço em segundo plano. Se o Android suspender o aplicativo, a conexão cai e é preciso conectar de novo. |
 | Arquivos | Não há envio nem recebimento de arquivos. |
 | Ponteiro no modo Toque | Com um Ponte anterior à 1.5.1 no computador, o ponteiro só aparece depois do primeiro toque. |
-| Ctrl+Alt+Del, tela de bloqueio, avisos do Windows | Fora do alcance, como no Ponte do Windows. |
+| Ctrl+Alt+Del | O aplicativo não envia. No Ponte do Windows ele existe desde a 1.17.0, com o serviço instalado. |
+| Tela de bloqueio e avisos do Windows | Fora do alcance, a não ser que o computador tenha o serviço do Ponte instalado. |
 | Atualização | Consulta e download automáticos ao abrir; a instalação pede a confirmação do Android. |
-| Testes | A 1.0.0 funcionou num aparelho real, conforme relato do usuário. Os recursos novos e o fluxo de instalação da 1.5.0 ainda precisam de validação no aparelho. |
+| Testes | A 1.17.1 foi publicada sem o teste do aplicativo, a pedido do dono. O teclado automático e a barra arrastável ainda não foram conferidos num aparelho. |
 
 ## 8. Acesso a este celular (1.14.0)
 
@@ -257,6 +270,17 @@ Separar o protocolo num módulo sem Android permite testá-lo no PC contra o Pon
 | `app/.../SoundPlayer.kt` | Reprodução do som do PC com AudioTrack e fila limitada. |
 | `app/.../Keyboard.kt` | Texto, teclas, modificadores armados e teclado físico. |
 | `app/.../Store.kt` | Preferências, computadores salvos, recentes, identidades vistas; e `DeviceIdentity`, a chave do aparelho. |
+
+### 7.1.1 O que a 1.17 acrescentou
+
+| Onde | O quê |
+|---|---|
+| `core/.../Wire.kt` | `Msg.TEXT_FOCUS = 75` e `Caps.TEXT_FOCUS = 256`. |
+| `core/.../Client.kt` | O `Hello` declara `CURSOR or AUDIO or TEXT_FOCUS`; `SessionListener.onTextFocus` avisa a sessão. |
+| `app/.../RemoteView.kt` | `lastTouch`, marcado em `ACTION_DOWN`: o teclado só abre sozinho se a pessoa encostou na tela nos últimos 3 segundos. |
+| `app/.../SessionActivity.kt` | A barra começa recolhida (`barCollapsed`), a seta é um puxador com tolerância de arrasto (toque curto ainda conta como clique), a posição é guardada como fração do espaço livre (`Store.barX`/`barY`) e aplicada por `translationX/Y`, e os números de monitor são montados quando o computador tem mais de uma tela. |
+| `app/.../Store.kt` | `barX` e `barY`, em "barraX" e "barraY". |
+| Conta | A conta do FilaBox e o bilhete, iguais aos do Windows. |
 
 ### 7.2 Identidade do aparelho
 

@@ -1,20 +1,39 @@
 # Operação: servidor, publicação e chaves
 
 Este documento é para quem mantém o Ponte: publicar versões, cuidar do servidor de retransmissão e
-guardar as chaves. Vale para a versão 1.6.4 do Windows e a 1.6.4 do Android.
+guardar as chaves. Vale para a versão 1.17.4 do Windows, 1.17.1 do Android, 1.17.0 do navegador e
+1.12.1 do iPhone.
 
 ## 1. As peças fora do código
 
 | Peça | Onde fica | Para que serve |
 |---|---|---|
-| Servidor de retransmissão | VPS com Linux, serviço `ponte-relay` | Junta os dois computadores numa conexão por ID e entrega os arquivos de atualização. |
+| Servidor de retransmissão | VPS com Linux, serviço `ponte-relay` | Junta os dois aparelhos numa conexão por ID, entrega os arquivos de atualização e assina os bilhetes da conta. |
 | Chave de acesso do servidor | `/etc/ponte-relay.env` no servidor e `RelayDefaults.cs` na máquina de desenvolvimento | Impede o uso do servidor por estranhos. As duas precisam ser iguais. |
+| Chave que assina os bilhetes | `PONTE_TICKET_KEY` em `/etc/ponte-relay.env` | Assina o bilhete da conta (1.17.0). A pública está em `Ticket.IssuerKey`, dentro de cada programa. |
+| Lista de contas liberadas | Supabase do FilaBox, tabela `public.ponte_liberados` | Quem pode usar o Ponte. Veja [conta.md](conta.md). |
 | Chave de assinatura das atualizações | `chaves\atualizacao.chave` na máquina de desenvolvimento | Assina cada versão publicada. |
-| Chave SSH do servidor | `%USERPROFILE%\.ssh\` na máquina de desenvolvimento | Permite ao `publicar.ps1` enviar os arquivos. |
+| Chave SSH do servidor | `%USERPROFILE%\.ssh\filabox_vps` | Permite aos scripts enviar os arquivos. |
 | Chave de assinatura do APK | `chaves\android.jks`, com a senha em `android\keystore.properties` | Assina o aplicativo Android. Sem ela o aplicativo instalado não aceita atualização. |
 
 Só a chave de assinatura do APK está no repositório (privado), por decisão do dono, para que outra
 máquina de quem mantém o projeto consiga gerar atualizações do aplicativo. As demais ficam fora dele.
+
+**Nunca mostre em tela, em registro ou numa captura:** a chave do servidor, a senha do keystore, a
+chave de serviço do Supabase e a `PONTE_TICKET_KEY`. As capturas de `--captura-ui` das
+Configurações mostram a chave do servidor; não as publique.
+
+### Os quatro programas
+
+| Programa | Versão em | Script de publicação |
+|---|---|---|
+| Windows | `<Version>` em `Ponte.csproj` | `publicar.ps1` |
+| Android | `versionCode` e `versionName` em `android/app/build.gradle.kts` | `android\gerar-apk.ps1` e `android\publicar-apk.ps1` |
+| Navegador | `VERSION` em `web/app.js` | `web\publicar-web.ps1` |
+| iPhone | `ios/project.yml` e `web/ios.json` | `ios\publicar-ios.ps1` |
+
+Há ainda o **repositório público** `dytech0021/ponte-app`, atualizado por `publicar-github.ps1`. O
+repositório privado `dytech0021/ponte` **nunca** pode virar público: ele tem a chave do APK.
 
 ## 2. Publicar uma versão
 
@@ -40,7 +59,17 @@ Duas razões tornam isso obrigatório, e não só boa prática:
    powershell -ExecutionPolicy Bypass -File .\publicar.ps1
    ```
 
-3. Faça o commit e envie ao repositório.
+3. Faça o commit e envie ao repositório (`main` e `main:recursos-1.5`).
+4. Atualize o repositório público e crie a release:
+
+   ```
+   powershell -ExecutionPolicy Bypass -File .\publicar-github.ps1
+   gh release create v1.17.4 "pronto\Ponte.exe" --repo dytech0021/ponte-app --title "Ponte 1.17.4" --notes-file nota.txt
+   ```
+
+O autoteste mexe o mouse por alguns segundos e toca um tom bem baixo; avise antes de rodá-lo numa
+máquina em uso. Se ele falhar, **não publique**: olhe as linhas que falharam. Se houver um Ponte
+aberto como administrador em primeiro plano, feche-o antes.
 
 ### 2.3 O que o `publicar.ps1` faz
 
@@ -105,6 +134,34 @@ identidade antiga do servidor.
 Uma mudança no protocolo que o aplicativo precise aproveitar exige publicar antes a versão do
 Windows que a entende, porque os computadores é que são acessados.
 
+### 2.8 Navegador e iPhone
+
+```
+powershell -ExecutionPolicy Bypass -File .\web\publicar-web.ps1
+powershell -ExecutionPolicy Bypass -File .\ios\publicar-ios.ps1
+```
+
+A versão da página vem de `VERSION` em `web/app.js` e precisa ser maior que a do servidor. Os
+arquivos vão com `Cache-Control: no-cache`, então quem já abriu a página pega a versão nova ao abrir
+de novo. A pasta é trocada inteira, e `web/ios.json` (a fonte do SideStore) vai junto: por isso os
+dois scripts andam emparelhados. Detalhes em [navegador-e-iphone.md](navegador-e-iphone.md).
+
+### 2.9 Repositório público
+
+```
+powershell -ExecutionPolicy Bypass -File .\publicar-github.ps1
+```
+
+Ele leva o código para `dytech0021/ponte-app`, conferindo que nenhum arquivo proibido (chaves,
+`RelayDefaults.cs`, keystore) vai junto. A cada versão, crie também a release com o executável:
+
+```
+gh release create vX.Y.Z "pronto\Ponte.exe" --repo dytech0021/ponte-app --title "Ponte X.Y.Z" --notes-file nota.txt
+```
+
+**O repositório privado `dytech0021/ponte` nunca pode ficar público**, e não deve existir outro
+repositório chamado `ponte`: a chave que assina o APK está dentro dele.
+
 ## 3. Servidor de retransmissão
 
 ### 3.1 O que está instalado
@@ -135,6 +192,12 @@ no servidor, ajuste esse caminho na unidade do serviço.
 | `PONTE_BIND` | `0.0.0.0` | Endereço de escuta. |
 | `PONTE_UPDATE_DIR` | `atualizacao`, ao lado do `relay.js` | Pasta dos arquivos de atualização. |
 | `PONTE_WS_PORT` | 0 (desligado) | Porta do WebSocket do Ponte no navegador (atrás do nginx). |
+| `PONTE_TICKET_KEY` | vazio | Chave EC P-256 (PKCS#8, DER em base64) que assina os bilhetes da conta. Sem ela o comando `TICKET` responde que o servidor não confere contas, e **nenhuma cópia 1.17.0 ou mais nova funciona**. |
+| `PONTE_SUPABASE_URL`, `PONTE_SUPABASE_KEY` | o projeto do FilaBox e a chave pública dele | Como o servidor fala com o Supabase para conferir a conta. A chave é a mesma que o site entrega a qualquer navegador; quem manda é a função `ponte_conta()`, que só responde sobre quem chamou. |
+| `PONTE_WS_BIND` | `127.0.0.1` | Onde o WebSocket escuta (o nginx fica na frente). |
+
+A pasta de atualização guarda hoje: `manifest.json` e `Ponte.exe` (Windows),
+`android-manifest.json` e `Ponte.apk` (Android) e `video-<sha256>.br` (componente de vídeo).
 
 O MediaMTX, que servia as lives do Ponte até a 1.10.1, agora é do Exilados: a configuração e a autorização dele
 ficam no repositório `dytech0021/exilados` (pasta `servidor/`).
@@ -202,13 +265,32 @@ trocá-la), o Windows pode perder o acesso aos dados protegidos dessa forma.
 servidor. Enquanto as cópias antigas existirem, elas continuam aceitando o que for assinado com a
 chave antiga.
 
-### 4.2 Identidade de cada computador
+### 4.2 Chave que assina os bilhetes da conta (1.17.0)
+
+Fica só no servidor, em `/etc/ponte-relay.env`, na linha `PONTE_TICKET_KEY=` (PKCS#8, DER em
+base64, EC P-256). A parte pública está em `Ticket.IssuerKey`, dentro de cada programa.
+
+| Situação | Consequência |
+|---|---|
+| A chave se perde | Nenhum bilhete novo é emitido. Quem tem bilhete continua até vencer (no máximo 14 dias); depois disso **nada funciona**. A volta é gerar outra chave, pôr a pública em `Ticket.IssuerKey` e publicar os quatro programas. |
+| A chave vaza | Quem a tiver emite bilhete para qualquer aparelho, o que só passa pelo requisito de conta: ele ainda precisa de aceite, senha ou autorização em cada computador. Mesmo assim, troque. |
+
+Como trocar exige publicar versão nova dos quatro programas e esperar todo mundo atualizar, planeje
+uma janela: deixe o servidor aceitando **as duas** chaves durante a troca, se isso for necessário.
+
+### 4.3 Lista de contas liberadas
+
+Fica no Supabase do FilaBox (`supabase/ponte-liberados.sql`). A tabela tem RLS sem políticas e as
+permissões revogadas: só as funções `security definer` a tocam, e só o administrador vê, libera e
+remove. Ver [conta.md](conta.md).
+
+### 4.4 Identidade de cada computador
 
 Fica no `config.json` de cada usuário, cifrada da mesma forma. Não há o que administrar. Se a
 configuração se perder, o computador ganha um ID novo, os outros precisam do endereço novo, e as
 autorizações de entrada direta têm de ser refeitas.
 
-### 4.3 Chave e endereço do servidor de retransmissão
+### 4.5 Chave e endereço do servidor de retransmissão
 
 O valor embutido no executável só é usado na **primeira** abertura. A partir daí vale o que está
 gravado na configuração de cada computador. Duas consequências:
@@ -233,6 +315,11 @@ indevido do servidor, e não como um segredo forte.
 |---|---|
 | `Ponte.exe --autoteste pasta` | Confere tudo por conexão direta, nesta máquina. |
 | `Ponte.exe --autoteste pasta --relay host:porta` | O mesmo, passando pelo servidor e conectando por ID. |
+| `Ponte.exe --autoteste pasta --so-video` | Só a parte de vídeo. |
+| `Ponte.exe --autoteste pasta --so-conta` | Só a conta, contra um Supabase falso nesta máquina. |
+| `Ponte.exe --autoteste-ciclo pasta` | O ciclo de vida do programa. |
+| `Ponte.exe --autoteste-servico pasta` | O serviço do Windows. |
+| `node --test relay/update.test.js` | O servidor de retransmissão, local e sem as chaves de produção. |
 | `Ponte.exe --captura-ui pasta` | Grava imagens das janelas, para conferir a interface. |
 | `Ponte.exe --demo pasta` | Abre uma sessão com a própria máquina e grava a imagem da janela. |
 | `Ponte.exe --janela-teste 30 --elevar` | Abre uma janela de administrador em primeiro plano, para testar o bloqueio de mouse e teclado. |
@@ -256,6 +343,8 @@ O que fica fora do git, e por quê:
 | `capturas/` | Imagens dos modos de verificação; a da sessão mostra a área de trabalho de quem rodou. |
 | `%APPDATA%\Ponte\miniaturas` (fora da pasta do projeto) | Miniaturas dos computadores acessados. Não fazem parte do repositório nem de cópia nenhuma. |
 | `android/local.properties`, `android/relay.properties` | Caminho do SDK e chave do servidor. |
+| `video-runtime/` | O FFmpeg usado para montar o pacote de vídeo. |
+| `%LOCALAPPDATA%\Ponte\video` (fora da pasta do projeto) | O componente de vídeo baixado por cada computador. |
 
 `chaves/android.jks` e `android/keystore.properties` continuam listados no `.gitignore`, mas foram
 acrescentados ao repositório à força (`git add -f`), por decisão do dono. Uma troca dessa chave tem
@@ -275,16 +364,16 @@ a chave de assinatura (seção 4.1).
 
 | Item | Situação |
 |---|---|
-| Aplicativo Android num aparelho de verdade | A 1.0.0 foi usada num aparelho e funcionou. As novidades da 1.5.0 (ponteiro de lá, som, miniaturas, tema escuro, atualização pelo aplicativo) ainda não foram conferidas num aparelho. |
-| Chave do APK trocada | A 1.5.0 do Android foi assinada com uma chave nova: nos aparelhos com a 1.0.0, é preciso desinstalar e instalar a 1.5.0 uma vez. |
-| Teste entre dois computadores diferentes | Ainda não feito para as novidades da 1.5.0. O ponteiro de lá e o som foram conferidos pelo autoteste com os dois lados na mesma máquina; ouvir o som de outro computador e ver o ponteiro mudar de forma numa sessão de verdade ainda falta. |
-| Som em computador com saída de som diferente de 48 kHz estéreo | O caminho em que o Windows recusa a conversão e o Ponte converte sozinho não foi exercitado: nas máquinas testadas o Windows converteu. |
-| Controle de programas de administrador | O recurso de abrir como administrador existe, mas não foi validado contra um programa elevado real numa conta de administrador. |
-| Tela de login, tela de bloqueio, avisos do UAC, Ctrl+Alt+Del | Fora do alcance sem um serviço do Windows. |
-| Início com o Windows | Disponível desde a 1.4.0: abre minimizado após o login; pode ser desligado em Configurações. |
-| Cópia de segurança da chave de assinatura | Não existe forma de levá-la para outra máquina. |
-| Lives e amigos | Saíram do Ponte na 1.11.0 e agora ficam no Exilados (veja `docs/SEM-LIVES-1.11.0.md`). O Ponte 1.11.0 do Windows precisa ser publicado no PC que tem a chave de atualização. |
-| Envio de arquivo para o aplicativo do celular | O aplicativo não grava arquivos; por isso o botão de enviar some quando quem acessa é um celular. |
-| Histórico de acessos | Não há arquivo de registro. |
-| Acesso a um celular (1.14.0) | Testado num Android 15 emulado, pelo servidor de verdade: o navegador e um cliente .NET (o mesmo TLS do Ponte do Windows) entram com senha e com aceite na tela; toque, arrastar, rolar, girar, digitar com acento, Voltar e Encerrar pela notificação funcionaram. Falta conferir num celular de verdade (bateria, fabricantes que fecham aplicativos) e a janela do Ponte do Windows 1.14.0 com os botões do celular. |
-| Ponte 1.14.0 do Windows | Botões Voltar/Início/Apps e texto pronto ao acessar um celular. Precisa ser publicado no PC que tem a chave de atualização. |
+| Janela por tela e "simular a disposição" (1.16.0 a 1.17.3) | Compilado e publicado, **sem teste com dois monitores**: a máquina que publica tem um monitor só. |
+| Teclado automático e barra arrastável do Android (1.17.1) | Publicados sem o teste do aplicativo, a pedido do dono. |
+| Ctrl+Alt+Del e serviço do Windows | O serviço existe desde a 1.15.0 e o Ctrl+Alt+Del desde a 1.17.0. Atender antes do login e no desktop protegido ainda não foi validado em uso real; veja `docs/SERVICO-E-CONEXAO-1.15.0.md`. |
+| Autoteste: "registro de sessões... o envio da imagem falhou" | Falha vista na 1.17.1 e não investigada; as versões seguintes foram publicadas com `-SemTeste`. |
+| Troca da chave dos bilhetes | Trocar a `PONTE_TICKET_KEY` exige publicar os quatro programas e esperar todo mundo atualizar. Não há hoje um caminho ensaiado para isso (seção 4.2). |
+| Chave do APK trocada | A 1.5.0 do Android foi assinada com uma chave nova: nos aparelhos com a 1.0.0, é preciso desinstalar e instalar uma vez. |
+| Som em computador com saída diferente de 48 kHz estéreo | O caminho em que o Windows recusa a conversão e o Ponte converte sozinho não foi exercitado. |
+| Controle de programas de administrador | O recurso existe, mas não foi validado contra um programa elevado real numa conta de administrador. |
+| Cópia de segurança da chave de assinatura das atualizações | Não existe forma de levá-la para outra máquina (seção 4.1). |
+| Envio de arquivo para o celular e para o navegador | Nenhum dos dois grava arquivos; por isso o botão de enviar some quando quem acessa é um deles. |
+| Acesso a um celular (1.14.0) | Testado num Android 15 emulado, pelo servidor de verdade. Falta conferir num celular de verdade (bateria, fabricantes que fecham aplicativos). |
+| Lives e amigos | Saíram do Ponte na 1.11.0 e agora ficam no Exilados (veja `docs/SEM-LIVES-1.11.0.md`). |
+| Apagar as telas do computador acessado | Pedido pelo dono, ainda não decidido nem implementado. |
