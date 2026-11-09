@@ -17,9 +17,14 @@ internal sealed class RemoteView : Control
     /// <summary>Quantas vezes a imagem foi desenhada e quanto tempo isso levou, para a barra de estado.</summary>
     public long Paints, PaintTicks;
 
+    // As áreas abertas (uma por janela, em "Cada tela em uma janela"): com o botão apertado, o mouse fica preso à área
+    // onde o clique começou; quando ele passa por cima da janela de outra tela, o arrasto continua nela (1.17.2).
+    private static readonly List<RemoteView> Open = new();
+
     public RemoteView(ViewerSession session)
     {
         _session = session;
+        Open.Add(this);
         SetStyle(ControlStyles.UserPaint | ControlStyles.AllPaintingInWmPaint | ControlStyles.OptimizedDoubleBuffer |
                  ControlStyles.Selectable | ControlStyles.ResizeRedraw, true);
         TabStop = true;
@@ -47,6 +52,7 @@ internal sealed class RemoteView : Control
     {
         if (disposing)
         {
+            Open.Remove(this);
             _moveTimer.Dispose();
             Cursor = Cursors.Default;
             _pointer?.Dispose();
@@ -165,7 +171,24 @@ internal sealed class RemoteView : Control
 
     private void SendMouse(Point p, int action, int wheel = 0)
     {
-        if (Map(p, out int nx, out int ny)) _ = _session.SendMouseAsync(nx, ny, action, wheel);
+        var (view, local) = Under(p);
+        if (view.Map(local, out int nx, out int ny)) _ = _session.SendMouseAsync(nx, ny, action, wheel);
+    }
+
+    /// <summary>
+    /// A área (desta sessão) que está debaixo do ponto: fora desta, com o mouse preso a ela num arrasto, pode ser a janela
+    /// de outra tela, e o ponto vira o ponto dentro dela. Assim uma janela de lá pode ser arrastada de uma tela para outra.
+    /// </summary>
+    private (RemoteView View, Point Local) Under(Point p)
+    {
+        if (ClientRectangle.Contains(p) || !IsHandleCreated) return (this, p);
+        var onScreen = PointToScreen(p);
+        foreach (var other in Open)
+        {
+            if (other == this || other._session != _session || !other.Visible || !other.IsHandleCreated) continue;
+            if (other.RectangleToScreen(other.ClientRectangle).Contains(onScreen)) return (other, other.PointToClient(onScreen));
+        }
+        return (this, p);
     }
 
     private void SendMove(Point p)
@@ -568,6 +591,18 @@ internal sealed class ViewerForm : Form
         _eachWindow.Checked = true;
         _view.SetCrop(Crop(screens[_screen]), aspect);
         Text = $"{_session.HostName} ({_session.Target}) - Tela {_screen + 1} - Ponte {Updater.Current}";
+        // Esta janela fica igual às das outras telas: só a imagem, no formato da tela. Os comandos aparecem com o mouse no
+        // alto da janela, como na tela cheia.
+        if (!_fullScreen)
+        {
+            _sizeBeforeWindows = WindowState == FormWindowState.Normal ? ClientSize : null;
+            SetBarsFloating(true);
+            if (WindowState == FormWindowState.Normal)
+            {
+                var current = screens[_screen];
+                ClientSize = RemoteView.Fit(ClientSize, current.Width, current.Height).Size;
+            }
+        }
 
         // Com mais de um monitor aqui, cada janela vai para um monitor que esta não ocupa; com um só, ficam em cascata.
         var spare = Screen.AllScreens.Where(s => !s.Bounds.IntersectsWith(Bounds)).ToList();
@@ -594,6 +629,40 @@ internal sealed class ViewerForm : Form
         Apply();
     }
 
+    private Size? _sizeBeforeWindows;
+
+    /// <summary>
+    /// Barras flutuando: sem barra de estado, e a de comandos solta sobre a imagem, escondida até o mouse encostar no
+    /// alto. Vale na tela cheia e em "Cada tela em uma janela".
+    /// </summary>
+    private void SetBarsFloating(bool floating)
+    {
+        SuspendLayout();
+        if (floating)
+        {
+            _statusBar.Visible = false;
+            _bar.Visible = false;
+            _bar.Dock = DockStyle.None;
+            // Solta do topo, a barra precisa dizer como acompanha a janela. Sem isso o Windows Forms falhava ao
+            // reorganizar a janela (NullReferenceException a cada atualização da barra de estado, em tela cheia).
+            _bar.Anchor = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right;
+            _bar.SetBounds(0, 0, ClientSize.Width, _bar.PreferredSize.Height);
+            _bar.BringToFront();
+            _reveal.Start();
+        }
+        else
+        {
+            _reveal.Stop();
+            // De volta ao fundo da pilha, a barra é encaixada antes da imagem e não fica por cima dela.
+            _bar.SendToBack();
+            _bar.Anchor = AnchorStyles.Top | AnchorStyles.Left;
+            _bar.Dock = DockStyle.Top;
+            _bar.Visible = true;
+            _statusBar.Visible = true;
+        }
+        ResumeLayout(true);
+    }
+
     private void CloseScreenWindows()
     {
         if (!_allScreens) return;
@@ -603,6 +672,12 @@ internal sealed class ViewerForm : Form
         {
             _view.ClearCrop();
             Text = $"{_session.HostName} ({_session.Target}) - Ponte {Updater.Current}";
+            if (!_fullScreen)
+            {
+                SetBarsFloating(false);
+                if (_sizeBeforeWindows is { } size && WindowState == FormWindowState.Normal) ClientSize = size;
+            }
+            _sizeBeforeWindows = null;
         }
         foreach (var window in _screenWindows.ToArray()) window.Close();
         _screenWindows.Clear();
@@ -771,36 +846,21 @@ internal sealed class ViewerForm : Form
     private void ToggleFullScreen(ToolStripButton button)
     {
         _fullScreen = !_fullScreen;
-        SuspendLayout();
         if (_fullScreen)
         {
             _previousState = WindowState;
             WindowState = FormWindowState.Normal;
             FormBorderStyle = FormBorderStyle.None;
             WindowState = FormWindowState.Maximized;
-            _statusBar.Visible = false;
-            _bar.Visible = false;
-            _bar.Dock = DockStyle.None;
-            // Solta do topo, a barra precisa dizer como acompanha a janela. Sem isso o Windows Forms falhava ao
-            // reorganizar a janela (NullReferenceException a cada atualização da barra de estado, em tela cheia).
-            _bar.Anchor = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right;
-            _bar.SetBounds(0, 0, ClientSize.Width, _bar.PreferredSize.Height);
-            _bar.BringToFront();
-            _reveal.Start();
+            SetBarsFloating(true);
         }
         else
         {
-            _reveal.Stop();
             FormBorderStyle = FormBorderStyle.Sizable;
             WindowState = _previousState;
-            // De volta ao fundo da pilha, a barra é encaixada antes da imagem e não fica por cima dela.
-            _bar.SendToBack();
-            _bar.Anchor = AnchorStyles.Top | AnchorStyles.Left;
-            _bar.Dock = DockStyle.Top;
-            _bar.Visible = true;
-            _statusBar.Visible = true;
+            // Em "Cada tela em uma janela" as barras continuam flutuando.
+            SetBarsFloating(_allScreens);
         }
-        ResumeLayout(true);
         button.Text = _fullScreen ? "Sair da tela cheia" : "Tela cheia";
         if (_fullScreen) _status.Text = "Tela cheia: leve o mouse ao alto da tela para ver os comandos.";
         _view.Focus();
@@ -808,11 +868,13 @@ internal sealed class ViewerForm : Form
 
     private void RevealBar()
     {
-        if (!_fullScreen || !IsHandleCreated) return;
+        if (!(_fullScreen || _allScreens) || !IsHandleCreated) return;
         var area = RectangleToScreen(ClientRectangle);
         var mouse = Cursor.Position;
         bool menuOpen = _bar.Items.OfType<ToolStripDropDownItem>().Any(i => i.DropDown.Visible);
-        if (!_bar.Visible && area.Contains(mouse) && mouse.Y <= area.Top + 2)
+        // Na janela comum, uma faixa um pouco maior no alto: logo acima está a barra de título.
+        int edge = _fullScreen ? 2 : LogicalToDeviceUnits(6);
+        if (!_bar.Visible && area.Contains(mouse) && mouse.Y <= area.Top + edge)
         {
             _bar.SetBounds(0, 0, ClientSize.Width, _bar.PreferredSize.Height);
             _bar.Visible = true;
