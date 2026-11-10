@@ -61,19 +61,62 @@ internal sealed class RemoteView : Control
         base.Dispose(disposing);
     }
 
-    /// <summary>Pode ser chamado de qualquer thread; vários quadros seguidos viram uma repintura só.</summary>
-    public void RequestRepaint()
+    // O que mudou na imagem desde a última repintura, em pontos dela: um retângulo, ou tudo.
+    private readonly object _dirtyGate = new();
+    private Rectangle _dirty;
+    private Size _dirtySize;
+    private bool _dirtyAll;
+
+    /// <summary>Repinta a área inteira. Pode ser chamado de qualquer thread.</summary>
+    public void RequestRepaint() => RequestRepaint(Rectangle.Empty, Size.Empty);
+
+    /// <summary>
+    /// A imagem de tamanho <paramref name="image"/> mudou em <paramref name="region"/> (vazio: inteira). Pode ser chamado
+    /// de qualquer thread; vários quadros seguidos viram uma repintura só, e só do pedaço da área que mostra a mudança
+    /// (1.17.5). Repintar a área inteira a cada tecla digitada lá custava 13 ms por janela; o pedaço custa menos de 1.
+    /// </summary>
+    public void RequestRepaint(Rectangle region, Size image)
     {
-        if (!IsHandleCreated || Interlocked.Exchange(ref _repaintPending, 1) != 0) return;
-        try
+        lock (_dirtyGate)
         {
-            BeginInvoke(() =>
+            if (region.IsEmpty || image.IsEmpty || (!_dirty.IsEmpty && image != _dirtySize)) { _dirtyAll = true; _dirty = Rectangle.Empty; }
+            else if (!_dirtyAll)
             {
-                _repaintPending = 0;
-                Invalidate();
-            });
+                _dirty = _dirty.IsEmpty ? region : Rectangle.Union(_dirty, region);
+                _dirtySize = image;
+            }
         }
+        if (!IsHandleCreated || Interlocked.Exchange(ref _repaintPending, 1) != 0) return;
+        try { BeginInvoke(FlushRepaint); }
         catch (InvalidOperationException) { _repaintPending = 0; }
+    }
+
+    private void FlushRepaint()
+    {
+        _repaintPending = 0;
+        Rectangle region;
+        Size image;
+        bool all;
+        lock (_dirtyGate)
+        {
+            (region, image, all) = (_dirty, _dirtySize, _dirtyAll);
+            _dirty = Rectangle.Empty;
+            _dirtyAll = false;
+        }
+        if (all) { Invalidate(); return; }
+        // Outro aviso já levou o que havia para repintar.
+        if (region.IsEmpty) return;
+        var source = Source(image.Width, image.Height);
+        var visible = Rectangle.Intersect(region, source);
+        // Mudou só um pedaço que esta área não mostra (outra tela, em "Cada tela em uma janela").
+        if (visible.IsEmpty) return;
+        var dest = Fit(source.Width, source.Height);
+        double sx = dest.Width / (double)source.Width, sy = dest.Height / (double)source.Height;
+        // A folga cobre a suavização: ampliada, cada ponto da imagem alcança alguns pontos vizinhos da área.
+        int pad = 2 + (int)Math.Ceiling(Math.Max(sx, sy));
+        Invalidate(Rectangle.FromLTRB(
+            dest.X + (int)Math.Floor((visible.Left - source.X) * sx) - pad, dest.Y + (int)Math.Floor((visible.Top - source.Y) * sy) - pad,
+            dest.X + (int)Math.Ceiling((visible.Right - source.X) * sx) + pad, dest.Y + (int)Math.Ceiling((visible.Bottom - source.Y) * sy) + pad));
     }
 
     private Rectangle Fit(int w, int h) => Fit(ClientSize, w, h);
@@ -146,6 +189,8 @@ internal sealed class RemoteView : Control
             long start = Stopwatch.GetTimestamp();
             var source = Source(canvas.Width, canvas.Height);
             var dest = Fit(source.Width, source.Height);
+            // Só o pedaço pedido é desenhado (o resto da área já está na tela).
+            e.Graphics.SetClip(e.ClipRectangle, CombineMode.Intersect);
             e.Graphics.InterpolationMode = dest.Width == source.Width ? InterpolationMode.NearestNeighbor : InterpolationMode.Bilinear;
             e.Graphics.PixelOffsetMode = PixelOffsetMode.Half;
             if (source.Size == canvas.Size) e.Graphics.DrawImage(canvas, dest);
@@ -523,7 +568,7 @@ internal sealed class ViewerForm : Form
         Controls.Add(bar);
         Controls.Add(statusBar);
 
-        session.FrameUpdated += _view.RequestRepaint;
+        session.RegionUpdated += _view.RequestRepaint;
         session.VideoStatusChanged += OnVideoStatusChanged;
         session.Closed += OnSessionClosed;
         session.ConnectionStatusChanged += text => Post(() => { _status.Text = text; _player.Silence(); });
@@ -738,10 +783,11 @@ internal sealed class ViewerForm : Form
         {
             _view.ClearCrop();
             Text = $"{_session.HostName} ({_session.Target}) - Ponte {Updater.Current}";
+            // O tamanho mínimo volta mesmo em tela cheia; senão, ao sair dela, a janela comum podia ficar minúscula.
+            MinimumSize = new Size(520, 360);
             if (!_fullScreen)
             {
                 SetBarsFloating(false);
-                MinimumSize = new Size(520, 360);
                 if (_sizeBeforeWindows is { } size && WindowState == FormWindowState.Normal) ClientSize = size;
             }
             _sizeBeforeWindows = null;
@@ -991,6 +1037,8 @@ internal sealed class ViewerForm : Form
     {
         if (_closing) return;
         _closing = true;
+        // As janelas das outras telas fecham antes do aviso: paradas na última imagem, pareciam ainda estar valendo.
+        CloseScreenWindows();
         if (reason.Length > 0) MessageBox.Show(this, reason, "Ponte", MessageBoxButtons.OK, MessageBoxIcon.Information);
         Close();
     });
@@ -1008,7 +1056,7 @@ internal sealed class ViewerForm : Form
         _playing = false;
         _player.Dispose();
         if (_thumbnail is not null) _session.SaveThumbnail(_thumbnail);
-        _session.FrameUpdated -= _view.RequestRepaint;
+        _session.RegionUpdated -= _view.RequestRepaint;
         _session.VideoStatusChanged -= OnVideoStatusChanged;
         _ = _session.DisposeAsync().AsTask();
         base.OnFormClosed(e);
@@ -1035,8 +1083,10 @@ internal sealed class ScreenWindow : Form
         _view = new RemoteView(session) { Dock = DockStyle.Fill };
         _view.SetCrop(crop, wholeAspect);
         Controls.Add(_view);
-        session.FrameUpdated += _view.RequestRepaint;
+        session.RegionUpdated += _view.RequestRepaint;
         session.PointerChanged += OnPointerChanged;
+        // O ponteiro de lá só é avisado quando muda de forma: a janela nasce com o que estiver valendo.
+        if (session.LastPointer is { } pointer) _view.SetPointer(pointer);
         Shown += (_, _) => _view.Focus();
     }
 
@@ -1049,7 +1099,7 @@ internal sealed class ScreenWindow : Form
 
     protected override void OnFormClosed(FormClosedEventArgs e)
     {
-        _session.FrameUpdated -= _view.RequestRepaint;
+        _session.RegionUpdated -= _view.RequestRepaint;
         _session.PointerChanged -= OnPointerChanged;
         base.OnFormClosed(e);
     }

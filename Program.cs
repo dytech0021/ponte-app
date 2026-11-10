@@ -28,6 +28,7 @@ internal static class Program
         // antigo está parada esperando este teste terminar, e no modo escuro do Windows um ficava esperando o outro:
         // a atualização falhava sempre ("não respondeu ao teste de partida").
         if (args.Contains("--verificar")) return 0;
+        Codecs.Ready();
         if (args.Contains("--servico")) return WindowsHost.RunService();
         if (args.Contains("--agente-servico")) return WindowsHost.RunAgent();
         if (args.Contains("--aviso-servico")) return int.TryParse(Arg(args,"--aviso-servico"), out int parentPid) && parentPid > 0 ? WindowsHost.RunNotice(parentPid) : 1;
@@ -98,7 +99,7 @@ internal static class Program
         if (Arg(args, "--atualizar-agora") is { } updateLog) return UpdateNow(updateLog, args);
         if (Arg(args, "--janela-teste") is { } seconds) return TestWindow(int.TryParse(seconds, out int s) ? Math.Clamp(s, 5, 300) : 30);
         if (Arg(args, "--autoteste") is { } testDir)
-            return Task.Run(() => SelfTest.RunAsync(testDir, Arg(args, "--relay"), args.Contains("--so-video"), args.Contains("--so-conta"))).GetAwaiter().GetResult();
+            return Task.Run(() => SelfTest.RunAsync(testDir, Arg(args, "--relay"), args.Contains("--so-video"), args.Contains("--so-conta"), args.Contains("--so-quadro"))).GetAwaiter().GetResult();
         if (Arg(args, "--demo") is { } demoDir) return Demo(demoDir, args);
 
         var config = AppConfig.Load(Arg(args, "--perfil"));

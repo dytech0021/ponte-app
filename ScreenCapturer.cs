@@ -1,3 +1,4 @@
+using System.Buffers.Binary;
 using System.Drawing.Imaging;
 
 namespace Ponte;
@@ -10,7 +11,6 @@ namespace Ponte;
 internal sealed class ScreenCapturer : IDisposable
 {
     private const int Tile = 64;
-    private static readonly ImageCodecInfo JpegCodec = ImageCodecInfo.GetImageEncoders().First(c => c.FormatID == ImageFormat.Jpeg.Guid);
 
     private Bitmap? _current, _previous;
     private string? _desktopName;
@@ -118,39 +118,88 @@ internal sealed class ScreenCapturer : IDisposable
         }
     }
 
-    internal static byte[] Encode(Bitmap image, List<Rectangle> rects, Rectangle full, int quality, bool chroma444 = false)
+    // 1.17.5: um retângulo grande vai em faixas, codificadas ao mesmo tempo em vários núcleos. Para quem recebe são só
+    // mais retângulos do mesmo quadro (o formato não muda, e as versões anteriores entendem igual), e ele também os
+    // decodifica ao mesmo tempo. Medido numa área de trabalho de 3440 x 2880: 23 ms para codificar inteira, 7 em 8 faixas.
+    private static readonly int MaxBands = Math.Clamp(Environment.ProcessorCount, 1, 8);
+    private const int BandPixels = 256 * 1024;
+
+    /// <summary>Corta os retângulos grandes em faixas com altura múltipla de 16 (o bloco do JPEG com a cor reduzida).</summary>
+    internal static List<Rectangle> Split(List<Rectangle> rects)
     {
-        using var output = new MemoryStream();
-        using var writer = new BinaryWriter(output);
-        writer.Write((ushort)full.Width);
-        writer.Write((ushort)full.Height);
-        writer.Write((ushort)rects.Count);
-        using var parameters = new EncoderParameters(1);
-        parameters.Param[0] = new EncoderParameter(System.Drawing.Imaging.Encoder.Quality, (long)Math.Clamp(quality, 10, 95));
-        using var jpeg = new MemoryStream();
+        if (MaxBands < 2) return rects;
+        var parts = new List<Rectangle>(rects.Count);
         foreach (var r in rects)
         {
-            jpeg.SetLength(0);
-            if (r == full)
+            int bands = (int)Math.Min(MaxBands, (long)r.Width * r.Height / BandPixels);
+            if (bands < 2) { parts.Add(r); continue; }
+            int height = Math.Max(16, (r.Height / bands + 15) / 16 * 16);
+            for (int y = 0; y < r.Height; y += height) parts.Add(new Rectangle(r.X, r.Y + y, r.Width, Math.Min(height, r.Height - y)));
+        }
+        return parts;
+    }
+
+    internal static byte[] Encode(Bitmap image, List<Rectangle> rects, Rectangle full, int quality, bool chroma444 = false)
+    {
+        var parts = Split(rects);
+        var encoded = new byte[parts.Count][];
+        long pixels = 0;
+        foreach (var r in parts) pixels += (long)r.Width * r.Height;
+        // Cada parte é codificada direto da memória da imagem, sem cópia: um Bitmap que aponta para o pedaço dela.
+        var data = image.LockBits(full, ImageLockMode.ReadOnly, PixelFormat.Format32bppRgb);
+        try
+        {
+            if (parts.Count > 1 && pixels >= BandPixels)
             {
-                if (chroma444) image.Save(jpeg, ImageFormat.Png);
-                else image.Save(jpeg, JpegCodec, parameters);
+                try { Parallel.For(0, parts.Count, i => encoded[i] = EncodePart(data, parts[i], quality, chroma444)); }
+                // Quem chama trata a falha do GDI+ (tela bloqueada, sem memória) pelo tipo dela, e não embrulhada.
+                catch (AggregateException ex) when (ex.InnerException is not null)
+                {
+                    System.Runtime.ExceptionServices.ExceptionDispatchInfo.Capture(ex.InnerException).Throw();
+                }
             }
             else
             {
-                using var part = image.Clone(r, image.PixelFormat);
-                if (chroma444) part.Save(jpeg, ImageFormat.Png);
-                else part.Save(jpeg, JpegCodec, parameters);
+                for (int i = 0; i < parts.Count; i++) encoded[i] = EncodePart(data, parts[i], quality, chroma444);
             }
-            writer.Write((ushort)r.X);
-            writer.Write((ushort)r.Y);
-            writer.Write((ushort)r.Width);
-            writer.Write((ushort)r.Height);
-            writer.Write((int)jpeg.Length);
-            writer.Write(jpeg.GetBuffer(), 0, (int)jpeg.Length);
         }
-        writer.Flush();
-        return output.ToArray();
+        finally { image.UnlockBits(data); }
+
+        int total = 6;
+        foreach (byte[] part in encoded) total += 12 + part.Length;
+        byte[] payload = new byte[total];
+        var span = payload.AsSpan();
+        BinaryPrimitives.WriteUInt16LittleEndian(span, (ushort)full.Width);
+        BinaryPrimitives.WriteUInt16LittleEndian(span[2..], (ushort)full.Height);
+        BinaryPrimitives.WriteUInt16LittleEndian(span[4..], (ushort)parts.Count);
+        int offset = 6;
+        for (int i = 0; i < parts.Count; i++)
+        {
+            var r = parts[i];
+            BinaryPrimitives.WriteUInt16LittleEndian(span[offset..], (ushort)r.X);
+            BinaryPrimitives.WriteUInt16LittleEndian(span[(offset + 2)..], (ushort)r.Y);
+            BinaryPrimitives.WriteUInt16LittleEndian(span[(offset + 4)..], (ushort)r.Width);
+            BinaryPrimitives.WriteUInt16LittleEndian(span[(offset + 6)..], (ushort)r.Height);
+            BinaryPrimitives.WriteInt32LittleEndian(span[(offset + 8)..], encoded[i].Length);
+            encoded[i].CopyTo(span[(offset + 12)..]);
+            offset += 12 + encoded[i].Length;
+        }
+        return payload;
+    }
+
+    private static byte[] EncodePart(BitmapData data, Rectangle r, int quality, bool chroma444)
+    {
+        using var part = new Bitmap(r.Width, r.Height, data.Stride, PixelFormat.Format32bppRgb, data.Scan0 + (nint)r.Y * data.Stride + r.X * 4);
+        using var stream = new MemoryStream();
+        // O codificador vai direto (veja Codecs): pelo formato, o .NET tropeça com várias linhas ao mesmo tempo.
+        if (chroma444) part.Save(stream, Codecs.Png, null);
+        else
+        {
+            using var parameters = new EncoderParameters(1);
+            parameters.Param[0] = new EncoderParameter(System.Drawing.Imaging.Encoder.Quality, (long)Math.Clamp(quality, 10, 95));
+            part.Save(stream, Codecs.Jpeg, parameters);
+        }
+        return stream.ToArray();
     }
 
     public void Dispose()
@@ -175,7 +224,8 @@ internal static class InputInjector
 
     private static void Send(Native.INPUT input)
     {
-        try { using var desktop = DesktopAccess.Enter(); LastBlocked = Native.SendInput(1, new[] { input }, InputSize) == 0; }
+        // Zero é a recusa declarada; com uma janela de administrador na frente o Windows devolve sucesso e descarta.
+        try { using var desktop = DesktopAccess.Enter(); LastBlocked = Native.SendInput(1, new[] { input }, InputSize) == 0 || Elevation.ForegroundOutOfReach(); }
         catch (System.ComponentModel.Win32Exception) { LastBlocked = true; }
     }
 
@@ -255,7 +305,7 @@ internal static class InputInjector
                 inputs.Add(input);
             }
         }
-        if (inputs.Count > 0) LastBlocked = Native.SendInput((uint)inputs.Count, inputs.ToArray(), InputSize) == 0;
+        if (inputs.Count > 0) LastBlocked = Native.SendInput((uint)inputs.Count, inputs.ToArray(), InputSize) == 0 || Elevation.ForegroundOutOfReach();
     }
 
     /// <summary>Solta o que ficou pressionado, para a sessão não terminar com um Ctrl ou Shift "grudado".</summary>

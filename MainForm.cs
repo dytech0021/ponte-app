@@ -465,7 +465,7 @@ internal sealed class MainForm : Form
         var list = NetworkInterface.GetAllNetworkInterfaces()
             .Where(n => n.OperationalStatus == OperationalStatus.Up && n.NetworkInterfaceType != NetworkInterfaceType.Loopback)
             .SelectMany(n => n.GetIPProperties().UnicastAddresses)
-            .Where(a => a.Address.AddressFamily == AddressFamily.InterNetwork && !a.Address.ToString().StartsWith("169.254."))
+            .Where(a => a.Address.AddressFamily == AddressFamily.InterNetwork && !a.Address.ToString().StartsWith("169.254.", StringComparison.Ordinal))
             .Select(a => _config.ListenPort == Transport.DefaultDirectPort ? a.Address.ToString() : $"{a.Address}:{_config.ListenPort}")
             .Distinct().Take(3).ToList();
         return list.Count > 0 ? string.Join("  ou  ", list) : "sem rede no momento";
@@ -723,7 +723,7 @@ internal sealed class MainForm : Form
         catch (PonteException ex)
         {
             if (_closed) return;
-            if (ex.Message.StartsWith("A conta saiu")) await SignOutAsync();
+            if (ex.Message.StartsWith("A conta saiu", StringComparison.Ordinal)) await SignOutAsync();
             else if (!Ticket.Valid(_config)) _status.Text = "Conta: " + ex.Message;
         }
     }
@@ -773,7 +773,7 @@ internal sealed class MainForm : Form
             if (_closed) return;
             _status.Text = "Conta: " + ex.Message;
             // A conta saiu deste aparelho (senha trocada, sessão encerrada em outro lugar): volta ao modo sem conta.
-            if (ex.Message.StartsWith("A conta saiu")) await SignOutAsync();
+            if (ex.Message.StartsWith("A conta saiu", StringComparison.Ordinal)) await SignOutAsync();
         }
         finally { _syncGate.Release(); }
     }

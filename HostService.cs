@@ -128,11 +128,17 @@ internal sealed class HostSession(Channel channel, HelloMsg hello, string remote
     {
         using var linked = CancellationTokenSource.CreateLinkedTokenSource(outer, _stop.Token);
         var ct = linked.Token;
+        Codecs.Ready();
         var capture = Task.Run(async () =>
         {
             try { await CaptureLoopAsync(ct); }
             catch (Exception ex) when (!ct.IsCancellationRequested)
             {
+                // Quando quem acessa se despede e fecha, o envio da imagem costuma falhar antes de a despedida ser lida,
+                // e o registro ficava com "o envio da imagem falhou" no lugar do motivo de verdade. A leitura tem um
+                // instante para dizer primeiro por que acabou (despedida, conexão caída); só depois vale este motivo.
+                for (int i = 0; i < 20 && _end is null && !_byeReceived && !ct.IsCancellationRequested; i++) await Task.Delay(25, CancellationToken.None);
+                if (_byeReceived) Note("o outro computador encerrou");
                 Note("o envio da imagem falhou: " + SessionLog.Describe(ex));
                 throw;
             }
@@ -168,8 +174,15 @@ internal sealed class HostSession(Channel channel, HelloMsg hello, string remote
                 await Quiet(channel.SendAsync(Msg.Bye, Encoding.UTF8.GetBytes("Sessão encerrada no computador remoto."), goodbye.Token));
             }
             _stop.Cancel();
+            // Quem se despediu foi este lado (encerrada aqui, ou por falta de uso): o que ainda chega é lido e descartado
+            // até o outro fechar. Fechar com mouse e teclas por ler faria o Windows derrubar a conexão, e a despedida, com
+            // o motivo, podia não chegar: lá apareceria "a conexão caiu" e uma tentativa de reconectar.
+            if (_stoppedHere || EndedIdle) await DrainAsync(TimeSpan.FromSeconds(1));
             SetSound(false);
-            foreach (var task in new[] { capture, sound, pointer, idle, textFocus })
+            // A consulta ao campo de texto depende de outros programas e pode demorar com um deles travado: o fim da
+            // sessão não espera por ela além de um instante (senão este computador ficava "com sessão em andamento").
+            var textFocusOrTimeout = Task.WhenAny(textFocus, Task.Delay(TimeSpan.FromSeconds(2), CancellationToken.None));
+            foreach (var task in new[] { capture, sound, pointer, idle, textFocusOrTimeout })
             {
                 try { await task; }
                 catch (Exception ex) when (ex is OperationCanceledException or IOException or ObjectDisposedException) { }
@@ -177,6 +190,15 @@ internal sealed class HostSession(Channel channel, HelloMsg hello, string remote
             }
             InputInjector.ReleaseAll();
         }
+    }
+
+    private async Task DrainAsync(TimeSpan limit)
+    {
+        using var brief = new CancellationTokenSource(limit);
+        try { while (await channel.ReadAsync(brief.Token) is not null) { } }
+        // Uma leitura interrompida no meio pode deixar o canal sem condição de ler de novo: aí fica como era antes.
+        catch (Exception ex) when (ex is IOException or OperationCanceledException or InvalidDataException or ObjectDisposedException
+                                       or InvalidOperationException or NotSupportedException or CryptographicException) { }
     }
 
     // Só o laço de leitura liga e desliga a captura, então não há disputa por _capture.
@@ -766,7 +788,7 @@ internal sealed class HostService(AppConfig config, bool standalone = false) : I
 
                 // O servidor só registra o ID de quem prova ter a chave privada correspondente.
                 string line = await Transport.ReadLineAsync(raw, ct);
-                if (!line.StartsWith("NONCE ")) throw new PonteException(Transport.RelayError(line));
+                if (!line.StartsWith("NONCE ", StringComparison.Ordinal)) throw new PonteException(Transport.RelayError(line));
                 using (var key = config.Certificate.GetECDsaPrivateKey() ?? throw new PonteException("Chave do computador indisponível."))
                 {
                     byte[] signature = key.SignData(Convert.FromHexString(line[6..]), HashAlgorithmName.SHA256);
@@ -796,7 +818,7 @@ internal sealed class HostService(AppConfig config, bool standalone = false) : I
                     {
                         line = await Transport.ReadLineAsync(raw, ct);
                         if (line == "PONG") Volatile.Write(ref lastPong, Stopwatch.GetTimestamp());
-                        else if (line.StartsWith("INCOMING ")) _ = AcceptFromRelayAsync(host, port, line[9..]);
+                        else if (line.StartsWith("INCOMING ", StringComparison.Ordinal)) _ = AcceptFromRelayAsync(host, port, line[9..]);
                         else if (_relayReply is { } reply && line.StartsWith(_relayReplyPrefix, StringComparison.Ordinal)) reply.TrySetResult(line);
                     }
                 }
@@ -824,19 +846,22 @@ internal sealed class HostService(AppConfig config, bool standalone = false) : I
 
     private async Task AcceptFromRelayAsync(string host, int port, string token)
     {
+        TcpClient? tcp = null;
         try
         {
-            var tcp = await Transport.ConnectTcpAsync(host, port, _cts.Token);
+            // O servidor responde na hora; o prazo é para uma conexão que morreu no caminho não ficar aberta para sempre.
+            using var brief = CancellationTokenSource.CreateLinkedTokenSource(_cts.Token);
+            brief.CancelAfter(TimeSpan.FromSeconds(20));
+            tcp = await Transport.ConnectTcpAsync(host, port, brief.Token);
             var raw = tcp.GetStream();
-            await Transport.WriteLineAsync(raw, Transport.RelayLine(config, "ACCEPT", token), _cts.Token);
-            if (await Transport.ReadLineAsync(raw, _cts.Token) != "OK")
-            {
-                tcp.Dispose();
-                return;
-            }
-            await HandleAsync(tcp, "pelo servidor de retransmissão");
+            await Transport.WriteLineAsync(raw, Transport.RelayLine(config, "ACCEPT", token), brief.Token);
+            if (await Transport.ReadLineAsync(raw, brief.Token) != "OK") return;
+            var accepted = tcp;
+            tcp = null; // daqui em diante quem fecha é o atendimento
+            await HandleAsync(accepted, "pelo servidor de retransmissão");
         }
-        catch (Exception ex) when (ex is PonteException or IOException or SocketException or OperationCanceledException) { }
+        catch (Exception ex) when (ex is PonteException or IOException or SocketException or OperationCanceledException or InvalidDataException or ObjectDisposedException) { }
+        finally { tcp?.Dispose(); }
     }
 
     private async Task HandleAsync(TcpClient tcp, string remote)
@@ -852,6 +877,7 @@ internal sealed class HostService(AppConfig config, bool standalone = false) : I
 
             var hello = await channel.ExpectAsync<HelloMsg>(Msg.Hello, preAuth.Token);
             string name = Trim(hello.Name), user = Trim(hello.User);
+            hello = hello with { Name = name, User = user, Version = hello.Version ?? "" };
             byte[] nonce = RandomNumberGenerator.GetBytes(32), ownHash = Security.CertificateHash(config.Certificate);
             // A chave própria do visualizador é o que identifica um computador autorizado; o nome que ele manda não prova nada.
             byte[]? viewerKey = TryKey(hello.Key);
@@ -982,7 +1008,8 @@ internal sealed class HostService(AppConfig config, bool standalone = false) : I
         return Convert.TryFromBase64String(text, bytes, out int written) && written > 0 ? bytes[..written] : null;
     }
 
-    private static string Trim(string text) => text.Length > 60 ? text[..60] : text;
+    // O nome vem de quem pede e pode faltar (um cliente que não seja o Ponte): vazio, e não uma falha no atendimento.
+    private static string Trim(string? text) => text is null ? "" : text.Length > 60 ? text[..60] : text;
 
     public void Dispose()
     {

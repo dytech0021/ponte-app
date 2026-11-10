@@ -100,8 +100,8 @@ internal static class Transport
             await WriteLineAsync(raw, RelayLine(config, command, "0"), timeout.Token);
             string reply = await ReadLineAsync(raw, timeout.Token);
             if (reply == "ERR none") return null;
-            if (!reply.StartsWith("OK ") || !int.TryParse(reply.AsSpan(3), out int length) || length <= 0 || length > maxBytes)
-                throw new PonteException(reply.StartsWith("ERR ") ? RelayError(reply) : "O servidor respondeu de forma inesperada ao pedido de atualização.");
+            if (!reply.StartsWith("OK ", StringComparison.Ordinal) || !int.TryParse(reply.AsSpan(3), out int length) || length <= 0 || length > maxBytes)
+                throw new PonteException(reply.StartsWith("ERR ", StringComparison.Ordinal) ? RelayError(reply) : "O servidor respondeu de forma inesperada ao pedido de atualização.");
 
             var data = new byte[length];
             int read = 0;
@@ -137,8 +137,8 @@ internal static class Transport
             await WriteLineAsync(raw, RelayLine(config, command, argument), idle.Token);
             string reply = await ReadLineAsync(raw, idle.Token);
             if (reply == "ERR none") throw new PonteException("O servidor ainda não tem esse arquivo.");
-            if (!reply.StartsWith("OK ") || !long.TryParse(reply.AsSpan(3), out long length) || length <= 0 || length > maxBytes)
-                throw new PonteException(reply.StartsWith("ERR ") ? RelayError(reply) : "O servidor respondeu de forma inesperada ao pedido do arquivo.");
+            if (!reply.StartsWith("OK ", StringComparison.Ordinal) || !long.TryParse(reply.AsSpan(3), out long length) || length <= 0 || length > maxBytes)
+                throw new PonteException(reply.StartsWith("ERR ", StringComparison.Ordinal) ? RelayError(reply) : "O servidor respondeu de forma inesperada ao pedido do arquivo.");
 
             var buffer = new byte[128 * 1024];
             for (long read = 0; read < length;)
@@ -170,14 +170,20 @@ internal static class Transport
             tcp = await ConnectTcpAsync(host, port, ct);
             try
             {
+                // O servidor responde em até 20 s (é o prazo dele para o outro computador atender); a folga é para uma
+                // conexão que morreu no caminho não deixar o "Conectando..." para sempre.
+                using var relayWait = CancellationTokenSource.CreateLinkedTokenSource(ct);
+                relayWait.CancelAfter(TimeSpan.FromSeconds(35));
                 var raw = tcp.GetStream();
-                await WriteLineAsync(raw, RelayLine(config, "CONNECT", id), ct);
-                string reply = await ReadLineAsync(raw, ct);
+                await WriteLineAsync(raw, RelayLine(config, "CONNECT", id), relayWait.Token);
+                string reply = await ReadLineAsync(raw, relayWait.Token);
                 if (reply != "OK") throw new PonteException(RelayError(reply));
             }
-            catch
+            catch (Exception ex)
             {
                 tcp.Dispose();
+                if (ex is OperationCanceledException && !ct.IsCancellationRequested) throw new PonteException("O servidor de retransmissão não respondeu a tempo.");
+                if (ex is IOException) throw new PonteException("A conexão com o servidor de retransmissão caiu.");
                 throw;
             }
         }
@@ -196,7 +202,9 @@ internal static class Transport
         });
         try
         {
-            await ssl.AuthenticateAsClientAsync(new SslClientAuthenticationOptions { TargetHost = "ponte", EnabledSslProtocols = Protocols }, ct);
+            using var handshake = CancellationTokenSource.CreateLinkedTokenSource(ct);
+            handshake.CancelAfter(TimeSpan.FromSeconds(20));
+            await ssl.AuthenticateAsClientAsync(new SslClientAuthenticationOptions { TargetHost = "ponte", EnabledSslProtocols = Protocols }, handshake.Token);
             if (remote is null) throw new PonteException("O outro computador não apresentou identidade.");
             if (byId && Security.IdFromCertificate(remote) != id)
                 throw new PonteException("A identidade do computador remoto não confere com o ID digitado. A conexão foi recusada.");
@@ -206,6 +214,7 @@ internal static class Transport
         {
             await ssl.DisposeAsync();
             if (ex is AuthenticationException or IOException) throw new PonteException("Falha ao estabelecer a conexão segura.");
+            if (ex is OperationCanceledException && !ct.IsCancellationRequested) throw new PonteException("O outro computador não respondeu a tempo.");
             throw;
         }
     }

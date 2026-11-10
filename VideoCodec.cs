@@ -157,9 +157,9 @@ internal static class VideoEncoder
     private static string N(long value) => value.ToString(CultureInfo.InvariantCulture);
 
     public static string Vendor(string encoder) =>
-        encoder.EndsWith("_nvenc") ? "NVIDIA" : encoder.EndsWith("_amf") ? "AMD" : encoder.EndsWith("_qsv") ? "Intel" : encoder;
+        encoder.EndsWith("_nvenc", StringComparison.Ordinal) ? "NVIDIA" : encoder.EndsWith("_amf", StringComparison.Ordinal) ? "AMD" : encoder.EndsWith("_qsv", StringComparison.Ordinal) ? "Intel" : encoder;
 
-    private static string PixelFormat(VideoOptions o, string encoder) => o.Chroma444 ? (encoder.EndsWith("_qsv") ? "vuyx" : "yuv444p") : "nv12";
+    private static string PixelFormat(VideoOptions o, string encoder) => o.Chroma444 ? (encoder.EndsWith("_qsv", StringComparison.Ordinal) ? "vuyx" : "yuv444p") : "nv12";
 
     // A conversão de RGB para YUV é feita aqui, com a matriz BT.709 e faixa limitada declaradas, e o
     // decodificador desfaz com a mesma: as cores não dependem do que cada placa de vídeo supõe.
@@ -181,13 +181,13 @@ internal static class VideoEncoder
             // menos de 0,1 Mbit/s com a tela parada, contra 3 a 10 Mbit/s sem o limite.
             "-qmin", "20",
             "-bufsize", N(o.UltraLowLatency ? bitrate / o.Fps : bitrate / 2) };
-        if (encoder.EndsWith("_nvenc"))
+        if (encoder.EndsWith("_nvenc", StringComparison.Ordinal))
         {
             args.AddRange(["-preset", o.UltraLowLatency ? "p1" : "p4", "-tune", o.UltraLowLatency ? "ull" : "ll",
                 "-rc", "cbr", "-rc-lookahead", "0", "-zerolatency", "1", "-delay", "0"]);
             if (o.Chroma444) args.AddRange(["-profile:v", o.Codec == "h264" ? "high444p" : "rext"]);
         }
-        else if (encoder.EndsWith("_amf"))
+        else if (encoder.EndsWith("_amf", StringComparison.Ordinal))
         {
             // Por padrão o FFmpeg deixa até 16 quadros dentro do codificador da AMD: quase 300 ms a 60 FPS.
             // Profundidade 1: o quadro sai do codificador sem esperar os seguintes.

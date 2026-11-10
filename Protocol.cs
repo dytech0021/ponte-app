@@ -1,3 +1,4 @@
+using System.Buffers;
 using System.Buffers.Binary;
 using System.Text.Json;
 
@@ -98,21 +99,34 @@ internal sealed class Channel(Stream stream) : IAsyncDisposable
     public int Limit = 8 * 1024;
     public long BytesReceived, BytesSent;
 
+    // Até este tamanho o cabeçalho e o conteúdo saem numa escrita só. Em duas, cada movimento de mouse, tecla e trecho
+    // de som virava dois registros cifrados e dois pacotes na rede (a conexão não junta escritas pequenas).
+    private const int JoinedLimit = 16 * 1024 - 5;
+
     public async Task SendAsync(Msg type, ReadOnlyMemory<byte> payload, CancellationToken ct)
     {
-        var header = new byte[5];
-        header[0] = (byte)type;
-        BinaryPrimitives.WriteInt32LittleEndian(header.AsSpan(1), payload.Length);
-        await _writeLock.WaitAsync(ct);
+        bool joined = payload.Length <= JoinedLimit;
+        byte[] head = joined ? ArrayPool<byte>.Shared.Rent(5 + payload.Length) : new byte[5];
+        head[0] = (byte)type;
+        BinaryPrimitives.WriteInt32LittleEndian(head.AsSpan(1), payload.Length);
+        if (joined) payload.CopyTo(head.AsMemory(5));
         try
         {
-            await stream.WriteAsync(header, ct);
-            if (payload.Length > 0) await stream.WriteAsync(payload, ct);
-            await stream.FlushAsync(ct);
+            await _writeLock.WaitAsync(ct);
+            try
+            {
+                await stream.WriteAsync(head.AsMemory(0, joined ? 5 + payload.Length : 5), ct);
+                if (!joined) await stream.WriteAsync(payload, ct);
+                await stream.FlushAsync(ct);
+            }
+            finally
+            {
+                _writeLock.Release();
+            }
         }
         finally
         {
-            _writeLock.Release();
+            if (joined) ArrayPool<byte>.Shared.Return(head);
         }
         Interlocked.Add(ref BytesSent, payload.Length + 5);
     }

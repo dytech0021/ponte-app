@@ -24,7 +24,7 @@ internal static partial class SelfTest
         return port;
     }
 
-    public static async Task<int> RunAsync(string dir, string? relay, bool onlyVideo = false, bool onlyAccount = false)
+    public static async Task<int> RunAsync(string dir, string? relay, bool onlyVideo = false, bool onlyAccount = false, bool onlyFrame = false)
     {
         Directory.CreateDirectory(dir);
         SessionLog.Folder = dir;
@@ -44,12 +44,16 @@ internal static partial class SelfTest
 
         try
         {
-            if (onlyAccount) await CheckAccountAsync(dir, Check);
+            // --so-quadro: só a codificação e a decodificação do quadro, sem rede, sem mouse e sem som (segundos).
+            if (onlyFrame) CheckFrameBands(Check);
+            else if (onlyAccount) await CheckAccountAsync(dir, Check);
             else await RunChecksAsync(dir, relay, Check, onlyVideo);
         }
         catch (Exception ex)
         {
-            Check("execução do teste", false, $"{ex.GetType().Name}: {ex.Message}");
+            // Com o começo da pilha: sem ela, uma falha que só acontece de vez em quando não diz onde foi.
+            string where = string.Join(" < ", (ex.StackTrace ?? "").Split((char)10, StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries).Take(6));
+            Check("execução do teste", false, $"{ex.GetType().Name}: {ex.Message} [{where}]");
         }
         log.AppendLine(allOk ? "RESULTADO: tudo certo" : "RESULTADO: houve falha");
         File.WriteAllText(Path.Combine(dir, "autoteste.txt"), log.ToString(), new UTF8Encoding(true));
@@ -133,6 +137,7 @@ internal static partial class SelfTest
         var qrWrong = qrCases.Where(c => QrHash(QrCode.Encode(c.Text, c.Mask)) != c.Sha).Select(c => $"{c.Text.Length} letras, máscara {c.Mask}").ToList();
         check("QR Code igual ao da implementação de referência", qrWrong.Count == 0, string.Join("; ", qrWrong));
         check("arquivo que não é APK não passa pela conferência de assinatura", AndroidApp.SignerDigest(RandomNumberGenerator.GetBytes(4096)) is null);
+        CheckFrameBands(check);
         if (!onlyVideo) await CheckAccountAsync(dir, check);
         if (relay is not null) await CheckAndroidAppAsync(viewerConfig, check);
 
@@ -278,6 +283,8 @@ internal static partial class SelfTest
         check("foco num campo de texto é percebido (para o celular abrir o teclado)", onText is null || (onText == true && onButton == false),
             onText is null ? "a janela de teste não ficou em primeiro plano" : $"caixa de texto={onText}, botão={onButton}", skipped: onText is null);
 
+        await Task.Run(() => CheckPartialRepaint(session, check));
+
         // 3. Mouse: move o cursor de verdade, confere e devolve ao lugar.
         var notice = new TaskCompletionSource<string>(TaskCreationOptions.RunContinuationsAsynchronously);
         session.Notice += text => notice.TrySetResult(text);
@@ -335,13 +342,13 @@ internal static partial class SelfTest
 
             // Arrastar: apertar na barra de título de uma janela, mover e soltar tem de levar a janela junto.
             var (dragged, dragDetail) = await DragTestWindowAsync(session, primary);
-            check("arrastar uma janela pela barra de título leva a janela junto", dragged, dragDetail);
+            check("arrastar uma janela pela barra de título leva a janela junto", dragged == true, dragDetail, skipped: dragged is null);
 
             // "Tocar duas vezes e arrastar" do celular: um clique e, logo depois, o botão apertado alguns
             // pixels adiante. Tem de arrastar a janela, e não virar clique duplo (que a maximizaria). Com o
             // botão descendo no mesmo ponto do clique, o Windows maximiza: foi o defeito da 1.5.3.
             var (tapDragged, tapDetail) = await DragTestWindowAsync(session, primary, tapFirst: true, nudge: 10);
-            check("tocar duas vezes e arrastar leva a janela sem maximizar", tapDragged, tapDetail);
+            check("tocar duas vezes e arrastar leva a janela sem maximizar", tapDragged == true, tapDetail, skipped: tapDragged is null);
             Native.SetCursorPos(before.X, before.Y);
 
             // 4. Teclado: F24 não existe em teclado comum, então não interfere em nenhum programa aberto.
@@ -636,7 +643,7 @@ internal static partial class SelfTest
     // andou exatamente o que o mouse andou, sem maximizar. Com tapFirst, antes vem um clique no mesmo
     // ponto, como no "tocar duas vezes e arrastar" do celular, e o botão desce nudge pixels adiante, na
     // direção do arraste.
-    private static async Task<(bool Moved, string Detail)> DragTestWindowAsync(ViewerSession session, Rectangle primary, bool tapFirst = false, int nudge = 0)
+    private static async Task<(bool? Moved, string Detail)> DragTestWindowAsync(ViewerSession session, Rectangle primary, bool tapFirst = false, int nudge = 0)
     {
         var shown = new TaskCompletionSource<Form>(TaskCreationOptions.RunContinuationsAsynchronously);
         var thread = new Thread(() =>
@@ -652,7 +659,16 @@ internal static partial class SelfTest
         thread.SetApartmentState(ApartmentState.STA);
         thread.Start();
         var window = await shown.Task;
+        // A janela de teste tem de ficar em primeiro plano: com uma janela de administrador na frente (o ERP, por
+        // exemplo), o Windows descarta o mouse em silêncio e o teste não teria o que medir.
+        window.Invoke(() => { window.Activate(); window.BringToFront(); });
         await Task.Delay(300);
+        if (Elevation.ForegroundOutOfReach())
+        {
+            window.BeginInvoke(window.Close);
+            thread.Join(2000);
+            return (null, "uma janela de administrador está em primeiro plano e o Windows não deixa mexer nela");
+        }
 
         var (start, clientTop) = window.Invoke(() => (window.Bounds, window.RectangleToScreen(window.ClientRectangle).Top));
         // Meio da barra de título, longe dos botões de minimizar e fechar.
@@ -680,11 +696,13 @@ internal static partial class SelfTest
         }
         await session.SendMouseAsync(Nx(press.X + moveX), Ny(press.Y + moveY), 2, 0);
         await Task.Delay(400);
+        bool blocked = Elevation.ForegroundOutOfReach();
 
         var (end, state) = window.Invoke(() => (window.Bounds, window.WindowState));
         window.BeginInvoke(window.Close);
         thread.Join(2000);
         int dx = end.X - start.X, dy = end.Y - start.Y;
+        if (blocked && dx == 0 && dy == 0) return (null, "uma janela de administrador tomou o primeiro plano durante o arraste");
         if (state == FormWindowState.Maximized) return (false, "a janela foi maximizada (o Windows entendeu clique duplo)");
         return (Math.Abs(dx - moveX) <= 2 && Math.Abs(dy - moveY) <= 2, $"a janela andou {dx},{dy}; o mouse andou {moveX},{moveY}");
     }

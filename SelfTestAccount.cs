@@ -80,7 +80,7 @@ internal static partial class SelfTest
             string gone = "";
             try { await Account.Restore(BuildWith(profile, "pessoa@exemplo.com", "u1", "renova1"))!.ListAsync(ct); }
             catch (PonteException ex) { gone = ex.Message; }
-            check("conta: sessão encerrada em outro lugar avisa que a conta saiu", gone.StartsWith("A conta saiu"), gone);
+            check("conta: sessão encerrada em outro lugar avisa que a conta saiu", gone.StartsWith("A conta saiu", StringComparison.Ordinal), gone);
         }
         finally
         {

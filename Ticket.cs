@@ -115,14 +115,14 @@ internal static class Ticket
         {
             throw new PonteException("Sem conexão com o servidor do Ponte para conferir a conta.");
         }
-        if (reply.StartsWith("TICKET ") && Verify(reply[7..], KeyHashOf(config), out _) is not null) return reply[7..];
-        if (reply.StartsWith("ERR naoliberado")) throw new NotReleasedException(reply.Length > 16 ? reply[16..] : "desta conta");
+        if (reply.StartsWith("TICKET ", StringComparison.Ordinal) && Verify(reply[7..], KeyHashOf(config), out _) is not null) return reply[7..];
+        if (reply.StartsWith("ERR naoliberado", StringComparison.Ordinal)) throw new NotReleasedException(reply.Length > 16 ? reply[16..] : "desta conta");
         throw new PonteException(reply switch
         {
             "ERR conta" => "A conta saiu deste computador. Entre de novo.",
             "ERR servidor" => "O servidor do Ponte não conseguiu conferir a conta agora. Tente de novo em instantes.",
             "ERR key" => Transport.RelayError(reply),
-            _ when reply.StartsWith("TICKET ") => "O servidor do Ponte mandou um bilhete inválido.",
+            _ when reply.StartsWith("TICKET ", StringComparison.Ordinal) => "O servidor do Ponte mandou um bilhete inválido.",
             _ => "O servidor do Ponte ainda não confere contas (falta atualizar o servidor).",
         });
     }

@@ -120,7 +120,7 @@ internal static class AndroidApp
             .OrderByDescending(n => n.Props.GatewayAddresses.Any(g => g.Address.AddressFamily == AddressFamily.InterNetwork && !g.Address.Equals(IPAddress.Any)))
             .ThenByDescending(n => n.Wireless)
             .SelectMany(n => n.Props.UnicastAddresses.Select(a => a.Address))
-            .Where(a => a.AddressFamily == AddressFamily.InterNetwork && !a.ToString().StartsWith("169.254."))
+            .Where(a => a.AddressFamily == AddressFamily.InterNetwork && !a.ToString().StartsWith("169.254.", StringComparison.Ordinal))
             .Distinct()
             .ToList();
     }

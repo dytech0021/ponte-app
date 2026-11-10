@@ -252,7 +252,7 @@ internal sealed class Account
         try
         {
             using var json = JsonDocument.Parse(body);
-            if (json.RootElement.TryGetProperty("message", out var m) && m.GetString() is { Length: > 0 } text && !text.StartsWith("Could not find")) explained = text;
+            if (json.RootElement.TryGetProperty("message", out var m) && m.GetString() is { Length: > 0 } text && !text.StartsWith("Could not find", StringComparison.Ordinal)) explained = text;
         }
         catch (JsonException) { }
         throw new PonteException(response.StatusCode == HttpStatusCode.NotFound
@@ -360,7 +360,7 @@ internal sealed class Account
         catch (Exception ex) when (ex is IOException or OperationCanceledException) { return (null, null); }
         string firstLine = Encoding.ASCII.GetString(buffer, 0, read).Split("\r\n")[0];
         string[] parts = firstLine.Split(' ');
-        if (parts.Length < 2 || !parts[1].StartsWith("/ponte")) { await RespondAsync(stream, 404, ""); return (null, null); }
+        if (parts.Length < 2 || !parts[1].StartsWith("/ponte", StringComparison.Ordinal)) { await RespondAsync(stream, 404, ""); return (null, null); }
         var query = parts[1].Contains('?') ? parts[1][(parts[1].IndexOf('?') + 1)..] : "";
         var values = query.Split('&', StringSplitOptions.RemoveEmptyEntries).Select(p => p.Split('=', 2))
             .ToDictionary(p => p[0], p => p.Length > 1 ? Uri.UnescapeDataString(p[1].Replace('+', ' ')) : "");

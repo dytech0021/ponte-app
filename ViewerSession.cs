@@ -10,6 +10,8 @@ internal sealed class ViewerSession : IAsyncDisposable
     private Channel _channel;
     private Func<CancellationToken, Task<ViewerSession>>? _reconnect;
     private bool _unexpected, _restartPending;
+    // Este lado está saindo: já mandou a despedida e só espera o outro fechar.
+    private volatile bool _leaving;
     private volatile bool _reconnecting;
     private SettingsMsg? _lastSettings;
     private string _lastReason = "";
@@ -61,6 +63,13 @@ internal sealed class ViewerSession : IAsyncDisposable
     public long Frames;
 
     public event Action? FrameUpdated;
+    /// <summary>
+    /// 1.17.5: a imagem mudou, e onde: o retângulo alterado (vazio quando é a imagem inteira) e o tamanho da imagem.
+    /// Quem desenha repinta só esse pedaço, e uma janela que mostra outra tela nem repinta.
+    /// </summary>
+    public event Action<Rectangle, Size>? RegionUpdated;
+    /// <summary>A última forma do ponteiro de lá, para uma janela aberta depois já nascer com ela.</summary>
+    public byte[]? LastPointer { get; private set; }
     public event Action<string>? Closed;
     public event Action<string>? FileReceived;
     public event Action<string>? ClipboardReceived;
@@ -90,8 +99,8 @@ internal sealed class ViewerSession : IAsyncDisposable
         HostIsPhone = (result.Caps & Caps.Phone) != 0;
         HostHasAllScreens = (result.Caps & Caps.AllScreens) != 0;
         HostHasSecureAttention = (result.Caps & Caps.SecureAttention) != 0;
-        HostName = result.HostName;
-        Screens = result.Screens;
+        HostName = result.HostName ?? "";
+        Screens = result.Screens ?? [];
         Fingerprint = fingerprint;
         Paired = result.Paired;
         HostVersion = result.Version is { Length: > 0 and <= 20 } v ? v : "";
@@ -160,7 +169,7 @@ internal sealed class ViewerSession : IAsyncDisposable
             var result = await channel.ExpectAsync<AuthResultMsg>(Msg.AuthResult, waiting.Token);
             if (!result.Ok)
             {
-                string denied = result.Reason.Length > 0 ? result.Reason : "Conexão recusada.";
+                string denied = result.Reason is { Length: > 0 } told ? told : "Conexão recusada.";
                 if (retrying && !denied.Contains("sessão em andamento")) throw new UnauthorizedAccessException(denied);
                 throw new PonteException(denied);
             }
@@ -177,7 +186,9 @@ internal sealed class ViewerSession : IAsyncDisposable
         {
             await channel.DisposeAsync();
             if (ex is OperationCanceledException && !ct.IsCancellationRequested) throw new PonteException("O outro computador não respondeu a tempo.");
-            if (ex is IOException or InvalidDataException or FormatException or System.Text.Json.JsonException) throw new PonteException("A conexão caiu durante a identificação.");
+            // ArgumentException: um campo obrigatório que veio faltando (desafio sem nonce, por exemplo).
+            if (ex is IOException or InvalidDataException or FormatException or System.Text.Json.JsonException or ArgumentException)
+                throw new PonteException("A conexão caiu durante a identificação.");
             throw;
         }
     }
@@ -257,6 +268,7 @@ internal sealed class ViewerSession : IAsyncDisposable
                         SetVideoStatus(Encoding.UTF8.GetString(m.Payload));
                         break;
                     case Msg.Cursor when m.Payload.Length is >= 5 and <= 512 * 1024:
+                        LastPointer = m.Payload;
                         PointerChanged?.Invoke(m.Payload);
                         break;
                     case Msg.CursorPos when m.Payload.Length >= 5:
@@ -315,6 +327,13 @@ internal sealed class ViewerSession : IAsyncDisposable
         }
         finally
         {
+            if (_leaving)
+            {
+                // A conexão acabou porque este lado se despediu: não é queda, e não é para tentar reconectar.
+                _unexpected = false;
+                reason = "";
+                detail = "encerrada neste computador";
+            }
             SessionLog.Write($"acessando: fim da sessão com {HostName} ({Target}) depois de {SessionLog.Duration(_started)}, " +
                              $"recebidos {SessionLog.Megabytes(BytesReceived)}, {VideoStatus}: {detail}");
             try { await StopVideoAsync(); }
@@ -375,6 +394,7 @@ internal sealed class ViewerSession : IAsyncDisposable
             Interlocked.Increment(ref Frames);
             if (Interlocked.Exchange(ref received, 1) == 0) SetVideoStatus(actual);
             FrameUpdated?.Invoke();
+            RegionUpdated?.Invoke(Rectangle.Empty, frame.Size);
             return true;
         }
         try
@@ -387,34 +407,23 @@ internal sealed class ViewerSession : IAsyncDisposable
 
     private void ApplyFrame(byte[] p)
     {
-        if (p.Length < 6) throw new InvalidDataException("Quadro incompleto.");
-        int width = BitConverter.ToUInt16(p, 0), height = BitConverter.ToUInt16(p, 2), count = BitConverter.ToUInt16(p, 4);
-        if (width == 0 || height == 0) throw new InvalidDataException("Quadro sem dimensões.");
+        var (width, height, parts) = FrameDecoder.Parse(p);
+        Rectangle changed;
+        bool fresh;
         lock (CanvasLock)
         {
-            if (Canvas is null || Canvas.Width != width || Canvas.Height != height)
+            fresh = Canvas is null || Canvas.Width != width || Canvas.Height != height;
+            if (fresh)
             {
                 Canvas?.Dispose();
                 Canvas = new Bitmap(width, height, System.Drawing.Imaging.PixelFormat.Format32bppRgb);
             }
-            using var g = Graphics.FromImage(Canvas);
-            int offset = 6;
-            for (int i = 0; i < count; i++)
-            {
-                if (offset + 12 > p.Length) throw new InvalidDataException("Quadro incompleto.");
-                int x = BitConverter.ToUInt16(p, offset), y = BitConverter.ToUInt16(p, offset + 2);
-                int w = BitConverter.ToUInt16(p, offset + 4), h = BitConverter.ToUInt16(p, offset + 6);
-                int length = BitConverter.ToInt32(p, offset + 8);
-                offset += 12;
-                if (length <= 0 || offset + length > p.Length || x + w > width || y + h > height) throw new InvalidDataException("Quadro incompleto.");
-                using var stream = new MemoryStream(p, offset, length, false);
-                using var image = Image.FromStream(stream);
-                g.DrawImage(image, x, y, w, h);
-                offset += length;
-            }
+            changed = FrameDecoder.Draw(Canvas!, p, parts);
         }
         Interlocked.Increment(ref Frames);
         FrameUpdated?.Invoke();
+        // Imagem nova (primeiro quadro, troca de tela ou de resolução): vale repintar tudo.
+        if (fresh || !changed.IsEmpty) RegionUpdated?.Invoke(fresh ? Rectangle.Empty : changed, new Size(width, height));
     }
 
     public Task SendMouseAsync(int nx, int ny, int action, int wheel)
@@ -506,12 +515,20 @@ internal sealed class ViewerSession : IAsyncDisposable
     {
         if (!_stop.IsCancellationRequested)
         {
+            _leaving = true;
+            bool said = false;
             try
             {
                 using var brief = new CancellationTokenSource(TimeSpan.FromSeconds(1));
                 await _channel.SendAsync(Msg.Bye, default, brief.Token);
+                said = true;
             }
             catch (Exception ex) when (ex is IOException or OperationCanceledException or ObjectDisposedException) { }
+            // O outro lado fecha a conexão ao ler a despedida; até lá este continua lendo o que chega. Fechar aqui com
+            // imagem ainda por ler faria o Windows derrubar a conexão (em vez de encerrá-la), e a despedida se perdia no
+            // caminho: lá ficava registrado "a conexão caiu" para uma sessão encerrada de propósito.
+            if (said && _reader is { } reading && !_reconnecting)
+                await Task.WhenAny(reading, Task.Delay(TimeSpan.FromSeconds(1)));
         }
         _stop.Cancel();
         await _channel.DisposeAsync();

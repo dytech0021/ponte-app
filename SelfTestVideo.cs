@@ -102,7 +102,7 @@ internal static partial class SelfTest
             pattern.BringToTop();
             int fullSince = session.VideoStatusVersion;
             await session.SendSettingsAsync(screen, 60, false, new VideoOptions(60, "h264", Chroma444: true));
-            string full = await WaitStatusAsync(session, fullSince, s => s.Contains("4:4:4") && !s.StartsWith("Procurando") && !s.StartsWith("Iniciando"), 40);
+            string full = await WaitStatusAsync(session, fullSince, s => s.Contains("4:4:4") && !s.StartsWith("Procurando", StringComparison.Ordinal) && !s.StartsWith("Iniciando", StringComparison.Ordinal), 40);
             await Task.Delay(2000);
             check("Chroma 4:4:4", full.Contains("4:4:4"), full);
             if (pattern.CoveredBy() is { } covered)
@@ -114,13 +114,13 @@ internal static partial class SelfTest
             pattern.BringToTop();
             int backSince = session.VideoStatusVersion;
             await session.SendSettingsAsync(screen, 60, false, new VideoOptions());
-            string back = await WaitStatusAsync(session, backSince, s => s.StartsWith("JPEG"), 20);
+            string back = await WaitStatusAsync(session, backSince, s => s.StartsWith("JPEG", StringComparison.Ordinal), 20);
             long before = Interlocked.Read(ref session.Frames);
             await pattern.SetFlashAsync(Color.Orange);
             bool flowing = await WaitAsync(() => Interlocked.Read(ref session.Frames) > before, 50);
             string jpegLatency = pattern.CoveredBy() is { } hidden ? $"não medido (janela de teste coberta por {hidden})"
                 : LatencyText(await MeasureLatencyAsync(pattern, probe, primary));
-            check("volta ao JPEG de sempre", back.StartsWith("JPEG") && flowing, $"{back}; atraso no JPEG: {jpegLatency}");
+            check("volta ao JPEG de sempre", back.StartsWith("JPEG", StringComparison.Ordinal) && flowing, $"{back}; atraso no JPEG: {jpegLatency}");
         }
         finally
         {
@@ -138,7 +138,7 @@ internal static partial class SelfTest
             using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(15));
             await Transport.WriteLineAsync(raw, Transport.RelayLine(config, command, argument), timeout.Token);
             string reply = await Transport.ReadLineAsync(raw, timeout.Token);
-            return reply.StartsWith("OK ") && long.TryParse(reply.AsSpan(3), out long size) ? size : null;
+            return reply.StartsWith("OK ", StringComparison.Ordinal) && long.TryParse(reply.AsSpan(3), out long size) ? size : null;
         }
         catch (Exception ex) when (ex is PonteException or IOException or OperationCanceledException or System.Net.Sockets.SocketException) { return null; }
     }

@@ -13,9 +13,9 @@ internal static class Presence
     public static async Task<Dictionary<string, bool>> CheckAsync(AppConfig config, IReadOnlyList<SavedEntry> saved, CancellationToken ct)
     {
         var result = new Dictionary<string, bool>();
-        var ids = saved.Where(s => s.Key.StartsWith("id:")).Select(s => s.Key[3..]).Distinct().ToList();
+        var ids = saved.Where(s => s.Key.StartsWith("id:", StringComparison.Ordinal)).Select(s => s.Key[3..]).Distinct().ToList();
         var relay = ids.Count > 0 && config.RelayServer.Length > 0 ? AskRelayAsync(config, ids, ct) : Task.FromResult<Dictionary<string, bool>?>(null);
-        var probes = saved.Where(s => s.Key.StartsWith("ip:")).Select(async s => (s.Key, Online: await ProbeAsync(s.Address, ct))).ToList();
+        var probes = saved.Where(s => s.Key.StartsWith("ip:", StringComparison.Ordinal)).Select(async s => (s.Key, Online: await ProbeAsync(s.Address, ct))).ToList();
         if (await relay is { } online)
             foreach (var (id, on) in online) result["id:" + id] = on;
         foreach (var (key, on) in await Task.WhenAll(probes)) result[key] = on;
@@ -37,7 +37,7 @@ internal static class Presence
                 var raw = tcp.GetStream();
                 await Transport.WriteLineAsync(raw, Transport.RelayLine(config, "STATUS", string.Join(',', chunk)), timeout.Token);
                 string reply = await Transport.ReadLineAsync(raw, timeout.Token);
-                if (!reply.StartsWith("STATUS ") || reply.Length != 7 + chunk.Length) return null;
+                if (!reply.StartsWith("STATUS ", StringComparison.Ordinal) || reply.Length != 7 + chunk.Length) return null;
                 for (int i = 0; i < chunk.Length; i++) online[chunk[i]] = reply[7 + i] == '1';
             }
             return online;
