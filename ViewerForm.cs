@@ -1,4 +1,4 @@
-using System.Diagnostics;
+﻿using System.Diagnostics;
 using System.Drawing.Drawing2D;
 using System.Drawing.Imaging;
 
@@ -9,6 +9,14 @@ internal sealed class RemoteView : Control
 {
     private readonly ViewerSession _session;
     private readonly HashSet<int> _keysDown = new();
+    // Atalho de trocar de tela (1.18.0): a combinação fica aqui e não vai para o outro lado. Depois dela, as solturas da
+    // tecla e das modificadoras que já tinham sido soltas lá também ficam aqui.
+    private readonly HashSet<int> _swallowUps = new();
+    /// <summary>Combinação que troca de tela (tecla + Ctrl/Shift/Alt); Keys.None desliga.</summary>
+    [System.ComponentModel.DesignerSerializationVisibility(System.ComponentModel.DesignerSerializationVisibility.Hidden)]
+    public Keys SwitchKeys { get; set; }
+    /// <summary>A combinação de <see cref="SwitchKeys"/> foi apertada nesta área.</summary>
+    public event Action? SwitchRequested;
     private readonly System.Windows.Forms.Timer _moveTimer = new() { Interval = 12 };
     private RemotePointer? _pointer;
     private Point? _pendingMove;
@@ -284,6 +292,13 @@ internal sealed class RemoteView : Control
                 // teclas de comando vão como teclas.
                 if (_session.HostIsPhone && !PhoneCommandKey(vk)) return true;
                 bool up = msg.Msg is Native.WM_KEYUP or Native.WM_SYSKEYUP;
+                if (up && _swallowUps.Remove(vk)) return true;
+                if (!up && SwitchKeys != Keys.None && IsSwitch(SwitchKeys, vk, Held(0x11), Held(0x10), Held(0x12)))
+                {
+                    ReleaseForSwitch(vk);
+                    BeginInvoke(() => SwitchRequested?.Invoke());
+                    return true;
+                }
                 bool extended = (((long)msg.LParam >> 24) & 1) != 0;
                 if (up) _keysDown.Remove(vk);
                 else _keysDown.Add(vk);
@@ -304,6 +319,35 @@ internal sealed class RemoteView : Control
 
     private char? _pendingSurrogate;
 
+    private static bool Held(int vk) => (Native.GetKeyState(vk) & 0x8000) != 0;
+
+    private static bool IsModifier(int vk) => vk is 0x10 or 0x11 or 0x12 or (>= 0xA0 and <= 0xA5);
+
+    /// <summary>Se a tecla <paramref name="vk"/>, com estas modificadoras apertadas, é exatamente a combinação.</summary>
+    internal static bool IsSwitch(Keys combo, int vk, bool ctrl, bool shift, bool alt) =>
+        combo != Keys.None && !IsModifier(vk) && (int)(combo & Keys.KeyCode) == vk
+        && ctrl == combo.HasFlag(Keys.Control) && shift == combo.HasFlag(Keys.Shift) && alt == combo.HasFlag(Keys.Alt);
+
+    // As modificadoras da combinação já tinham descido lá: sobem agora, para nada ficar preso. Alt (ou Windows) descer e
+    // subir sozinho abriria o menu da janela de lá (ou o Iniciar), então antes passa uma tecla sem uso, como o próprio
+    // Windows faz.
+    private void ReleaseForSwitch(int vk)
+    {
+        _swallowUps.Add(vk);
+        if (_keysDown.Count == 0) return;
+        if (_keysDown.Any(k => k is 0x12 or 0xA4 or 0xA5 or 0x5B or 0x5C))
+        {
+            _ = _session.SendKeyAsync(0xE8, false, false);
+            _ = _session.SendKeyAsync(0xE8, true, false);
+        }
+        foreach (int held in _keysDown)
+        {
+            _ = _session.SendKeyAsync(held, true, held is 0x5B or 0x5C or 0xA3 or 0xA5);
+            _swallowUps.Add(held);
+        }
+        _keysDown.Clear();
+    }
+
     // Teclas que um celular trata como comando: modificadoras, Enter, apagar, setas, Esc (Voltar), Windows (Início) e
     // qualquer tecla com Ctrl (copiar, colar...). As outras viram texto pelo WM_CHAR.
     private static bool PhoneCommandKey(int vk) =>
@@ -316,6 +360,7 @@ internal sealed class RemoteView : Control
         // Ao sair da janela com uma tecla apertada, a soltura nunca chegaria ao outro lado.
         foreach (int vk in _keysDown) _ = _session.SendKeyAsync(vk, true, false);
         _keysDown.Clear();
+        _swallowUps.Clear();
         base.OnLostFocus(e);
     }
 
@@ -423,6 +468,14 @@ internal sealed class ViewerForm : Form
         };
         _simulate.Click += (_, _) => SimulateClicked();
         screens.DropDownItems.Add(_simulate);
+        screens.DropDownItems.Add(new ToolStripSeparator());
+        _switchItem = new ToolStripMenuItem { ToolTipText = "Uma combinação de teclas que passa para a próxima tela de lá; fica guardada para as próximas conexões" };
+        _switchItem.Click += (_, _) => ChooseSwitchKeys();
+        screens.DropDownItems.Add(_switchItem);
+        _switchKeys = (Keys)(config?.SwitchScreenKeys ?? 0);
+        _view.SwitchKeys = session.Screens.Length > 1 ? _switchKeys : Keys.None;
+        _view.SwitchRequested += NextScreen;
+        UpdateSwitchItem();
         // Perfis: escolher um aplica a qualidade e o vídeo dele; mudar a qualidade ou o vídeo muda o perfil em uso.
         _profileButton = new ToolStripDropDownButton { ToolTipText = "Perfil de transmissão: o que for mudado nele fica guardado para as próximas conexões" };
         foreach (var (key, name) in StreamProfile.All)
@@ -619,7 +672,53 @@ internal sealed class ViewerForm : Form
 
     // ---------- cada tela em uma janela ----------
 
-    private readonly ToolStripMenuItem _eachWindow, _simulate;
+    private readonly ToolStripMenuItem _eachWindow, _simulate, _switchItem;
+    private Keys _switchKeys;
+
+    private void UpdateSwitchItem() =>
+        _switchItem.Text = $"Atalho para trocar de tela: {(_switchKeys == Keys.None ? "nenhum" : SwitchKeysDialog.Describe(_switchKeys))}...";
+
+    private void ChooseSwitchKeys()
+    {
+        using var dialog = new SwitchKeysDialog(_switchKeys);
+        if (dialog.ShowDialog(this) != DialogResult.OK) { _view.Focus(); return; }
+        _switchKeys = dialog.Combo;
+        var active = _session.Screens.Length > 1 ? _switchKeys : Keys.None;
+        _view.SwitchKeys = active;
+        foreach (var window in _screenWindows) window.SwitchKeys = active;
+        UpdateSwitchItem();
+        if (_config is not null)
+        {
+            _config.SwitchScreenKeys = (int)_switchKeys;
+            SaveConfig();
+        }
+        _status.Text = _switchKeys == Keys.None ? "Atalho para trocar de tela desligado." : $"{SwitchKeysDialog.Describe(_switchKeys)} passa para a próxima tela.";
+        _view.Focus();
+    }
+
+    /// <summary>
+    /// O atalho foi apertado: com uma tela por vez, passa a mostrar a próxima tela de lá; com cada tela numa janela, o
+    /// teclado passa para a janela da próxima tela.
+    /// </summary>
+    private void NextScreen()
+    {
+        var screens = _session.Screens;
+        if (_closing || screens.Length < 2) return;
+        int position = Math.Max(0, Array.FindIndex(screens, s => s.Index == _screen));
+        if (!_allScreens)
+        {
+            int next = screens[(position + 1) % screens.Length].Index;
+            ShowScreen(next);
+            _status.Text = $"Tela {next + 1} de {screens.Length}.";
+            return;
+        }
+        // Cada tela numa janela: a próxima é a da tela seguinte à da janela que está com o teclado agora.
+        int current = ActiveForm is ScreenWindow w && _windowScreen.TryGetValue(w, out int shown) ? shown : _screen;
+        int from = Math.Max(0, Array.FindIndex(screens, s => s.Index == current));
+        int target = screens[(from + 1) % screens.Length].Index;
+        if (target == _screen) { Activate(); _view.Focus(); }
+        else if (_windowScreen.FirstOrDefault(p => p.Value == target).Key is { IsDisposed: false } window) window.FocusView();
+    }
     private readonly ToolStripButton _fullButton;
     private readonly List<ScreenWindow> _screenWindows = new();
     private readonly Dictionary<ScreenWindow, int> _windowScreen = new();
@@ -719,6 +818,8 @@ internal sealed class ViewerForm : Form
         foreach (var s in screens.Where(s => s.Index != _screen))
         {
             var window = new ScreenWindow(_session, Crop(s), aspect, $"{_session.HostName} - Tela {s.Index + 1} ({s.Width} x {s.Height}) - Ponte");
+            window.SwitchKeys = _view.SwitchKeys;
+            window.SwitchRequested += NextScreen;
             var area = spare.Count > 0 ? spare[0].WorkingArea : Screen.FromControl(this).WorkingArea;
             if (spare.Count > 0) spare.RemoveAt(0);
             var client = RemoteView.Fit(new Size(area.Width * 7 / 10, area.Height * 7 / 10), s.Width, s.Height).Size;
@@ -1087,7 +1188,21 @@ internal sealed class ScreenWindow : Form
         session.PointerChanged += OnPointerChanged;
         // O ponteiro de lá só é avisado quando muda de forma: a janela nasce com o que estiver valendo.
         if (session.LastPointer is { } pointer) _view.SetPointer(pointer);
+        _view.SwitchRequested += () => SwitchRequested?.Invoke();
         Shown += (_, _) => _view.Focus();
+    }
+
+    /// <summary>O atalho de trocar de tela, igual ao da janela principal.</summary>
+    [System.ComponentModel.DesignerSerializationVisibility(System.ComponentModel.DesignerSerializationVisibility.Hidden)]
+    public Keys SwitchKeys { get => _view.SwitchKeys; set => _view.SwitchKeys = value; }
+    public event Action? SwitchRequested;
+
+    /// <summary>Traz esta janela para a frente com o teclado nela.</summary>
+    public void FocusView()
+    {
+        if (WindowState == FormWindowState.Minimized) WindowState = FormWindowState.Normal;
+        Activate();
+        _view.Focus();
     }
 
     private void OnPointerChanged(byte[] payload)

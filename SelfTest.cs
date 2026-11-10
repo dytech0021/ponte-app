@@ -1,4 +1,4 @@
-using System.Diagnostics;
+﻿using System.Diagnostics;
 using System.Drawing.Imaging;
 using System.Net;
 using System.Net.Sockets;
@@ -45,7 +45,7 @@ internal static partial class SelfTest
         try
         {
             // --so-quadro: só a codificação e a decodificação do quadro, sem rede, sem mouse e sem som (segundos).
-            if (onlyFrame) CheckFrameBands(Check);
+            if (onlyFrame) { CheckFrameBands(Check); CheckSwitchKeys(Check); }
             else if (onlyAccount) await CheckAccountAsync(dir, Check);
             else await RunChecksAsync(dir, relay, Check, onlyVideo);
         }
@@ -138,6 +138,7 @@ internal static partial class SelfTest
         check("QR Code igual ao da implementação de referência", qrWrong.Count == 0, string.Join("; ", qrWrong));
         check("arquivo que não é APK não passa pela conferência de assinatura", AndroidApp.SignerDigest(RandomNumberGenerator.GetBytes(4096)) is null);
         CheckFrameBands(check);
+        CheckSwitchKeys(check);
         if (!onlyVideo) await CheckAccountAsync(dir, check);
         if (relay is not null) await CheckAndroidAppAsync(viewerConfig, check);
 

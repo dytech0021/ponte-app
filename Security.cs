@@ -170,6 +170,11 @@ internal sealed class AppConfig
     /// </summary>
     public bool SimulateScreens { get; set; }
     /// <summary>
+    /// Combinação de teclas (Keys do Windows Forms: tecla + Ctrl/Shift/Alt) que, numa sessão com um computador de
+    /// várias telas, passa para a próxima tela em vez de ir para o outro lado; 0 é sem atalho (1.18.0).
+    /// </summary>
+    public int SwitchScreenKeys { get; set; }
+    /// <summary>
     /// Minutos sem uso (sem mouse, teclado ou toque de quem acessa) até a sessão neste computador ser encerrada; 0 é nunca.
     /// Quando quem acessa manda o tempo dele, vale o dele.
     /// </summary>

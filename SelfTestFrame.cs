@@ -54,6 +54,22 @@ internal static partial class SelfTest
         check("quadro com imagem estragada é recusado como dado inválido", refused);
     }
 
+    // 1.18.0: o atalho de trocar de tela pega só a combinação exata e não aceita o que é digitação comum.
+    private static void CheckSwitchKeys(Checker check)
+    {
+        var combo = Keys.Control | Keys.Alt | Keys.Right;
+        const int right = 0x27, m = 0x4D;
+        bool exact = RemoteView.IsSwitch(combo, right, ctrl: true, shift: false, alt: true);
+        bool others = !RemoteView.IsSwitch(combo, right, true, true, true) && !RemoteView.IsSwitch(combo, right, true, false, false)
+            && !RemoteView.IsSwitch(combo, m, true, false, true) && !RemoteView.IsSwitch(Keys.None, right, false, false, false)
+            && !RemoteView.IsSwitch(Keys.Control | Keys.ControlKey, 0x11, true, false, false);
+        bool allowed = SwitchKeysDialog.Allowed(Keys.F9) && SwitchKeysDialog.Allowed(Keys.Control | Keys.Shift | Keys.M)
+            && !SwitchKeysDialog.Allowed(Keys.M) && !SwitchKeysDialog.Allowed(Keys.Shift | Keys.M) && !SwitchKeysDialog.Allowed(Keys.Shift | Keys.D5);
+        string text = SwitchKeysDialog.Describe(combo);
+        check("atalho de trocar de tela pega só a combinação exata e recusa digitação comum",
+            exact && others && allowed && text == "Ctrl + Alt + Seta para a direita", $"exata {exact}, outras recusadas {others}, permitidas {allowed}, \"{text}\"");
+    }
+
     [System.Runtime.InteropServices.DllImport("gdi32.dll")]
     [return: System.Runtime.InteropServices.MarshalAs(System.Runtime.InteropServices.UnmanagedType.Bool)]
     private static extern bool BitBlt(IntPtr target, int x, int y, int width, int height, IntPtr source, int sourceX, int sourceY, uint operation);
